@@ -7,6 +7,11 @@ We introduce a novel method that enables the effective use of a large language m
 <img src="img/system.png" width="100%" height="100%">
 </p>
 
+## NDSS 2026 Paper and presentation.
+
+Paper: [NDSS 2026 proceedings](https://www.ndss-symposium.org/ndss-paper/incident-response-planning-using-a-lightweight-large-language-model-with-reduced-hallucination/).
+Video: [NDSS 2026 presentation](https://www.youtube.com/watch?v=TGuNgPEFnwk).
+
 ## Artifacts 
 
 - The first public fine-tuning dataset of incidents and response actions. This is the dataset we use to produce the results in the paper. The dataset can be downloaded [here](https://huggingface.co/datasets/kimhammar/CSLE-IncidentResponse-V1).
