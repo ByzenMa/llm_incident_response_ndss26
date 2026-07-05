@@ -218,6 +218,25 @@ python kg_rag.py --incident-json incident.json --depth 2
 - STIX 2.1 specification for cyber threat intelligence objects and relationships: <https://docs.oasis-open.org/cti/stix/v2.1/stix-v2.1.html>.
 
 
+
+### Preprocessing `examples_16_june.json` for KG-RAG fine-tuning
+
+`enriched_training_dataset.py` chains the stage-2 log parser and stage-3 KG-RAG builder before training. It reads the original `examples_16_june.json` examples, parses each instruction into structured incident JSON, retrieves KG-RAG security context, validates the incident/KG links, and saves a local training file that keeps the same `instructions`/`answers` shape expected by `fine_tune_llm.py`.
+
+Preprocess first and save the local KG-RAG training file:
+
+```bash
+python enriched_training_dataset.py --data-file examples_16_june.json --output examples_16_june_kg_rag.json --kg-depth 2
+```
+
+Then train from the saved file instead of enriching examples during training:
+
+```bash
+python fine_tune_llm.py --dataset-mode kg_rag --processed-data-file examples_16_june_kg_rag.json
+```
+
+For convenience, `fine_tune_llm.py` also has `--preprocess-kg-rag-data`, which performs the same explicit preprocessing step, writes `--processed-data-file`, and only then loads that local file for model training. Use `--dataset-mode original` to keep the previous behavior and train from the original `examples_16_june.json` data.
+
 ### Fine-tuning DeepSeek-R1-Distill-Qwen-14B on our incident response dataset
 
 Command:
