@@ -29,6 +29,11 @@ ORIGINAL_MODE = "original"
 KG_RAG_MODE = "kg_rag"
 
 
+def _print_progress(message: str, enabled: bool = True) -> None:
+    if enabled:
+        print(f"[enriched_training_dataset] {message}", flush=True)
+
+
 def _extract_pairs_from_mapping(data: Dict[str, Any]) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
     instructions = data.get("instructions")
     answers = data.get("answers")
@@ -111,15 +116,25 @@ def build_enriched_examples(
     answers: Sequence[str],
     limit: Optional[int] = None,
     kg_depth: int = 2,
+    show_progress: bool = False,
+    progress_interval: int = 25,
 ) -> Tuple[List[str], List[str], List[Dict[str, Any]]]:
     """Convert original examples into directly trainable KG-RAG-enriched examples."""
     limited_instructions, limited_answers = _limit_pairs(instructions, answers, limit)
     enriched_instructions: List[str] = []
     metadata: List[Dict[str, Any]] = []
+    total = len(limited_instructions)
+    _print_progress(f"Starting KG-RAG enrichment for {total} examples.", show_progress)
+    interval = max(1, progress_interval)
     for index, instruction in enumerate(limited_instructions):
         enriched, item_metadata = enrich_instruction(instruction, index=index, kg_depth=kg_depth)
         enriched_instructions.append(enriched)
         metadata.append(item_metadata)
+        completed = index + 1
+        if completed == total or completed == 1 or completed % interval == 0:
+            validation_status = "ok" if item_metadata["validation"].get("ok") else "failed"
+            _print_progress(f"Enriched {completed}/{total} examples; latest validation={validation_status}.", show_progress)
+    _print_progress(f"Completed KG-RAG enrichment for {total} examples.", show_progress)
     return enriched_instructions, limited_answers, metadata
 
 
@@ -178,14 +193,27 @@ def preprocess_kg_rag_dataset(
     output_path: Path = Path(DEFAULT_KG_RAG_DATA_FILE),
     limit: Optional[int] = None,
     kg_depth: int = 2,
+    show_progress: bool = True,
+    progress_interval: int = 25,
 ) -> Dict[str, Any]:
     """Preprocess examples_16_june.json into a local KG-RAG training file."""
+    _print_progress(f"Loading source examples from {data_file}.", show_progress)
     instructions, answers = load_original_examples(data_file=data_file, limit=limit)
-    enriched_instructions, enriched_answers, metadata = build_enriched_examples(instructions, answers, kg_depth=kg_depth)
+    _print_progress(f"Loaded {len(instructions)} instructions and {len(answers)} answers.", show_progress)
+    enriched_instructions, enriched_answers, metadata = build_enriched_examples(
+        instructions,
+        answers,
+        kg_depth=kg_depth,
+        show_progress=show_progress,
+        progress_interval=progress_interval,
+    )
+    _print_progress("Validating enriched incident JSON and KG-RAG context.", show_progress)
     validation_errors = [item["validation"] for item in metadata if not item["validation"].get("ok")]
     if validation_errors:
         raise ValueError(f"KG-RAG enrichment validation failed: {validation_errors}")
+    _print_progress(f"Saving preprocessed KG-RAG training data to {output_path}.", show_progress)
     save_training_examples(output_path, enriched_instructions, enriched_answers, metadata)
+    _print_progress("Preprocessing finished successfully.", show_progress)
     return {
         "source_data_file": data_file,
         "output_path": str(output_path),
@@ -233,14 +261,23 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--kg-depth", type=int, default=2)
     parser.add_argument("--output", type=Path, default=Path(DEFAULT_KG_RAG_DATA_FILE), help="Local file to save preprocessed KG-RAG training data.")
+    parser.add_argument("--progress-interval", type=int, default=25, help="Print enrichment progress every N examples.")
     args = parser.parse_args()
 
     if args.mode == ORIGINAL_MODE:
+        _print_progress(f"Loading original examples from {args.data_file}.")
         instructions, answers = load_original_examples(args.data_file, limit=args.limit)
+        _print_progress(f"Saving {len(instructions)} original examples to {args.output}.")
         save_training_examples(args.output, instructions, answers, [])
         summary = {"mode": args.mode, "output_path": str(args.output), "num_instructions": len(instructions), "num_answers": len(answers)}
     else:
-        summary = preprocess_kg_rag_dataset(args.data_file, args.output, limit=args.limit, kg_depth=args.kg_depth)
+        summary = preprocess_kg_rag_dataset(
+            args.data_file,
+            args.output,
+            limit=args.limit,
+            kg_depth=args.kg_depth,
+            progress_interval=args.progress_interval,
+        )
         summary["mode"] = args.mode
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 

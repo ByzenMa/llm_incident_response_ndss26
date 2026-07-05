@@ -57,3 +57,16 @@ def test_preprocess_saves_local_file_then_training_loader_reads_it(tmp_path):
 def test_kg_rag_training_mode_requires_preprocessed_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_preprocessed_kg_rag_examples(str(tmp_path / "missing.json"))
+
+
+def test_preprocess_prints_progress(tmp_path, capsys):
+    source = tmp_path / "examples_16_june.json"
+    output = tmp_path / "examples_16_june_kg_rag.json"
+    _write_source(source)
+
+    preprocess_kg_rag_dataset(data_file=str(source), output_path=output, progress_interval=1)
+
+    captured = capsys.readouterr()
+    assert "Loading source examples" in captured.out
+    assert "Enriched 1/1 examples" in captured.out
+    assert "Preprocessing finished successfully" in captured.out
