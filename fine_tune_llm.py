@@ -1,7 +1,6 @@
 import argparse
+import json
 from pathlib import Path
-
-from transformers import set_seed
 
 from enriched_training_dataset import (
     DEFAULT_DATA_FILE,
@@ -11,6 +10,9 @@ from enriched_training_dataset import (
     load_training_examples,
     preprocess_kg_rag_dataset,
 )
+
+
+DEFAULT_MODEL_OUTPUT_DIR = Path("fine_tuned_models/deepseek-r1-distill-qwen-14b-lora")
 
 
 def parse_args():
@@ -26,11 +28,43 @@ def parse_args():
     parser.add_argument("--preprocess-kg-rag-data", action="store_true", help="Preprocess --data-file into --processed-data-file before loading it for training.")
     parser.add_argument("--limit", type=int, default=5, help="Number of examples to fine-tune on; preserves the previous default of 5.")
     parser.add_argument("--kg-depth", type=int, default=2, help="KG neighborhood depth used only during preprocessing.")
+    parser.add_argument(
+        "--model-output-dir",
+        type=Path,
+        default=DEFAULT_MODEL_OUTPUT_DIR,
+        help="Local directory for the final fine-tuned LoRA model and tokenizer.",
+    )
+    parser.add_argument(
+        "--no-save-local-model",
+        dest="save_local_model",
+        action="store_false",
+        default=True,
+        help="Do not save the final fine-tuned model locally (saving is enabled by default).",
+    )
+    parser.add_argument(
+        "--no-save-tokenizer",
+        dest="save_tokenizer",
+        action="store_false",
+        default=True,
+        help="Do not save tokenizer files alongside the final fine-tuned model.",
+    )
     return parser.parse_args()
+
+
+def save_fine_tuned_artifacts(llm, tokenizer, output_dir: Path, save_tokenizer: bool, metadata: dict) -> None:
+    """Persist the final LoRA adapter, optional tokenizer, and run metadata locally."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    llm.save_pretrained(str(output_dir))
+    if save_tokenizer:
+        tokenizer.save_pretrained(str(output_dir))
+    (output_dir / "training_metadata.json").write_text(
+        json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 if __name__ == '__main__':
     # Heavy dependencies stay inside the executable path so helper functions can be unit-tested without a GPU stack.
+    from transformers import set_seed
     from llm_recovery.fine_tuning.examples_dataset import ExamplesDataset
     from llm_recovery.fine_tuning.lora import LORA
     from llm_recovery.load_llm.load_llm import LoadLLM
@@ -91,3 +125,21 @@ if __name__ == '__main__':
                                 save_steps=save_steps, save_limit=save_limit,
                                 gradient_accumulation_steps=gradient_accumulation_steps,
                                 progress_save_frequency=progress_save_frequency, seed=seed)
+    if args.save_local_model:
+        save_fine_tuned_artifacts(
+            llm=llm,
+            tokenizer=tokenizer,
+            output_dir=args.model_output_dir,
+            save_tokenizer=args.save_tokenizer,
+            metadata={
+                "dataset_mode": args.dataset_mode,
+                "data_file": args.data_file,
+                "processed_data_file": args.processed_data_file,
+                "num_training_examples": len(instructions),
+                "lora_rank": lora_rank,
+                "lora_alpha": lora_alpha,
+                "lora_dropout": lora_dropout,
+                "seed": seed,
+            },
+        )
+        print(f"Saved final fine-tuned model to {args.model_output_dir}.")

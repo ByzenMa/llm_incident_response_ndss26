@@ -237,6 +237,16 @@ python fine_tune_llm.py --dataset-mode kg_rag --processed-data-file examples_16_
 
 For convenience, `fine_tune_llm.py` also has `--preprocess-kg-rag-data`, which performs the same explicit preprocessing step, writes `--processed-data-file`, and only then loads that local file for model training. Use `--dataset-mode original` to keep the previous behavior and train from the original `examples_16_june.json` data.
 
+After training, the LoRA adapter, tokenizer, and `training_metadata.json` are saved locally by default in `fine_tuned_models/deepseek-r1-distill-qwen-14b-lora`. Set `--model-output-dir` to select another local destination:
+
+```bash
+python fine_tune_llm.py --dataset-mode kg_rag \
+  --processed-data-file examples_16_june_kg_rag.json \
+  --model-output-dir ./models/csle-kg-rag-lora
+```
+
+Use `--no-save-tokenizer` to omit tokenizer files, or `--no-save-local-model` to disable final artifact saving.
+
 ### Fine-tuning DeepSeek-R1-Distill-Qwen-14B on our incident response dataset
 
 Command:
