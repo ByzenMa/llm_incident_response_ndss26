@@ -219,6 +219,39 @@ python kg_rag.py --incident-json incident.json --depth 2
 
 
 
+
+### Generation post-processing safety gate
+
+When a model has been fine-tuned with KG-RAG-enriched examples, generation should still be validated before any response action is executed. `response_post_processor.py` implements a deterministic post-processing gate that normalizes generated actions with `action_schema_parser.py` and checks:
+
+- **CVE authenticity/plausibility**: validates CVE identifier format and year range, and warns when a referenced CVE is not present in the KG-RAG context or an explicit allow-list.
+- **Command syntax**: parses shell-like commands with `shlex` and warns on executables outside the incident-response command allow-list.
+- **Policy constraints**: blocks high-risk destructive commands such as root recursive deletion, raw disk overwrite, filesystem formatting, firewall flush/disable, and reboot/shutdown actions; destructive/recovery actions must include rollback guidance.
+- **Attack-path validation**: compares generated MITRE ATT&CK technique IDs or attack-stage mentions with the KG-RAG context to reduce unsupported attack-path claims.
+
+Run post-processing directly on generated text:
+
+```bash
+python response_post_processor.py \
+  --generation '{"Action":"Run `tcpdump -i eth0 host moveit-01` for CVE-2023-34362 evidence.","Explanation":"Maps to T1190; rollback by deleting the temporary capture."}' \
+  --kg-context incident_security_context.json
+```
+
+Or enable the post-processing stage in `response_generation.py` after loading either the published model or a locally saved fine-tuned model:
+
+```bash
+python response_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --dataset-mode kg_rag \
+  --processed-data-file examples_16_june_kg_rag.json \
+  --kg-context incident_security_context.json \
+  --enable-post-processing \
+  --post-processed-output generation_postprocess_report.json
+```
+
+The report contains accepted actions, blocked actions, all findings, and a summary. Treat `error` findings as blocking issues that require human review or regeneration, and treat `warning` findings as verification tasks before execution.
+
+
 ### Preprocessing `examples_16_june.json` for KG-RAG fine-tuning
 
 `enriched_training_dataset.py` chains the stage-2 log parser and stage-3 KG-RAG builder before training. It reads the original `examples_16_june.json` examples, parses each instruction into structured incident JSON, retrieves KG-RAG security context, validates the incident/KG links, and saves a local training file that keeps the same `instructions`/`answers` shape expected by `fine_tune_llm.py`.
