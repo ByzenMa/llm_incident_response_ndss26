@@ -283,6 +283,30 @@ generation paired with the KG context retrieved for that incident so that CVE
 and attack-path support are evaluated against the context actually presented to
 the model.
 
+#### Comparing the base and KG-RAG-fine-tuned models
+
+Generate responses from both models for the same ordered evaluation prompts,
+and save them as `base_generations.jsonl` and `kg_rag_generations.jsonl`. Every
+corresponding record should use the same `id` (or `record_id`, `incident_id`, or
+`prompt_id`) and the same retrieved KG context. Then compare the three metrics:
+
+```bash
+python response_model_comparison.py \
+  --baseline-input base_generations.jsonl \
+  --candidate-input kg_rag_generations.jsonl \
+  --baseline-name deepseek-base \
+  --candidate-name csle-kg-rag-lora \
+  --output model_comparison_report.json
+```
+
+For every metric, the report contains the base and fine-tuned rates,
+`absolute_change` (fine-tuned minus base), `absolute_improvement` (base minus
+fine-tuned), and `relative_reduction` (`absolute_improvement / base`). Because
+all three metrics are error rates, a positive improvement or relative reduction
+indicates that the KG-RAG-fine-tuned model performed better. Relative reduction
+is `null` when the base rate is zero. The command rejects unequal record counts
+and mismatched paired record IDs to prevent comparison over different prompts.
+
 
 ### Preprocessing `examples_16_june.json` for KG-RAG fine-tuning
 
