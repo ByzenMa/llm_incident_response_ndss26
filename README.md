@@ -251,6 +251,38 @@ python response_generation.py \
 
 The report contains accepted actions, blocked actions, all findings, and a summary. Treat `error` findings as blocking issues that require human review or regeneration, and treat `warning` findings as verification tasks before execution.
 
+### Response quality and safety evaluation
+
+`response_evaluation.py` evaluates saved model generations with the same rules
+as the generation post-processing gate. It reports three aggregate metrics and
+retains per-action findings for audit and error analysis:
+
+- **Hallucinated action rate** = actions containing a malformed, implausible,
+  or KG-untrusted CVE, or an ATT&CK technique not linked to the incident KG,
+  divided by all generated actions. Missing path references are reported by the
+  safety gate but are not counted as fabricated claims.
+- **Incorrect command rate** = commands that cannot be parsed or whose
+  executable is outside the incident-response allow-list, divided by all
+  generated commands. Actions without commands do not affect this denominator.
+- **Unsafe action rate** = actions with a blocking policy violation, such as a
+  prohibited destructive command or a destructive/recovery action without a
+  rollback plan, divided by all generated actions.
+
+Create a JSON array or JSONL file in which every record contains `generation`
+(or `generated_response`, `response`, or `actions`) and may contain the matching
+`kg_context`/`security_context`. Then run:
+
+```bash
+python response_evaluation.py \
+  --input generated_responses.jsonl \
+  --output evaluation_report.json
+```
+
+The report includes each metric's numerator, denominator, and rate. Keep each
+generation paired with the KG context retrieved for that incident so that CVE
+and attack-path support are evaluated against the context actually presented to
+the model.
+
 
 ### Preprocessing `examples_16_june.json` for KG-RAG fine-tuning
 

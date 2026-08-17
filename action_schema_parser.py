@@ -110,6 +110,10 @@ def _extract_commands(text: str) -> List[str]:
     for pattern in _COMMAND_PATTERNS:
         for match in re.findall(pattern, text, flags=re.IGNORECASE):
             command = (match if isinstance(match, str) else " ".join(match)).strip().rstrip(".,;")
+            # A command-name pattern may start inside an already captured
+            # backtick span and otherwise consume the closing backtick plus
+            # prose. Keep only the executable text in that case.
+            command = command.split("`", 1)[0].strip()
             if command and command not in commands:
                 commands.append(command)
     return commands

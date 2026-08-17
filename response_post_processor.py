@@ -135,7 +135,7 @@ class GenerationPostProcessor:
         self.require_context_cve_match = require_context_cve_match
 
     def process(self, generation: Any, kg_context: Optional[Dict[str, Any]] = None) -> PostProcessResult:
-        parsed_actions = self._parse_actions(generation)
+        parsed_actions = self.parse_actions(generation)
         accepted: List[PostProcessedAction] = []
         blocked: List[PostProcessedAction] = []
         all_findings: List[ValidationFinding] = []
@@ -161,7 +161,8 @@ class GenerationPostProcessor:
             summary=self._summarize(result_ok, len(parsed_actions), len(blocked), all_findings),
         )
 
-    def _parse_actions(self, generation: Any) -> List[ParsedAction]:
+    def parse_actions(self, generation: Any) -> List[ParsedAction]:
+        """Normalize one generated response into independently evaluable actions."""
         if isinstance(generation, list):
             items = generation
         else:
