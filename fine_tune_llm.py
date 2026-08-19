@@ -1,18 +1,112 @@
-from llm_recovery.load_llm.load_llm import LoadLLM
-from llm_recovery.fine_tuning.lora import LORA
-import llm_recovery.constants.constants as constants
-from llm_recovery.fine_tuning.examples_dataset import ExamplesDataset
-from transformers import set_seed
-from datasets import load_dataset
+import argparse
+import json
+from pathlib import Path
+
+from enriched_training_dataset import (
+    DEFAULT_DATA_FILE,
+    DEFAULT_KG_RAG_DATA_FILE,
+    DEFAULT_KG_RAG_TEST_FILE,
+    DEFAULT_KG_RAG_TRAIN_FILE,
+    KG_RAG_MODE,
+    ORIGINAL_MODE,
+    load_training_examples,
+    preprocess_kg_rag_dataset,
+)
+
+
+DEFAULT_MODEL_OUTPUT_DIR = Path("fine_tuned_models/deepseek-r1-distill-qwen-14b-lora")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Fine-tune the incident-response LLM.")
+    parser.add_argument(
+        "--dataset-mode",
+        choices=(ORIGINAL_MODE, KG_RAG_MODE),
+        default=ORIGINAL_MODE,
+        help="Use the original examples_16_june.json pairs or a local KG-RAG-enriched JSON file.",
+    )
+    parser.add_argument("--data-file", default=DEFAULT_DATA_FILE, help="Original CSLE-IncidentResponse data file; defaults to examples_16_june.json.")
+    parser.add_argument("--processed-data-file", default=DEFAULT_KG_RAG_TRAIN_FILE, help="Local KG-RAG training split read when --dataset-mode kg_rag is used.")
+    parser.add_argument("--preprocessed-full-data-file", default=DEFAULT_KG_RAG_DATA_FILE, help="Local file containing all preprocessed examples before splitting.")
+    parser.add_argument("--test-data-file", default=DEFAULT_KG_RAG_TEST_FILE, help="Local held-out split written during preprocessing.")
+    parser.add_argument("--test-ratio", type=float, default=0.2, help="Fraction of preprocessed examples reserved for testing.")
+    parser.add_argument("--split-seed", type=int, default=99125, help="Seed used for reproducible train/test splitting.")
+    parser.add_argument("--preprocess-kg-rag-data", action="store_true", help="Preprocess --data-file into --processed-data-file before loading it for training.")
+    parser.add_argument("--limit", type=int, default=5, help="Number of examples to fine-tune on; preserves the previous default of 5.")
+    parser.add_argument("--kg-depth", type=int, default=2, help="KG neighborhood depth used only during preprocessing.")
+    parser.add_argument(
+        "--model-output-dir",
+        type=Path,
+        default=DEFAULT_MODEL_OUTPUT_DIR,
+        help="Local directory for the final fine-tuned LoRA model and tokenizer.",
+    )
+    parser.add_argument(
+        "--no-save-local-model",
+        dest="save_local_model",
+        action="store_false",
+        default=True,
+        help="Do not save the final fine-tuned model locally (saving is enabled by default).",
+    )
+    parser.add_argument(
+        "--no-save-tokenizer",
+        dest="save_tokenizer",
+        action="store_false",
+        default=True,
+        help="Do not save tokenizer files alongside the final fine-tuned model.",
+    )
+    return parser.parse_args()
+
+
+def save_fine_tuned_artifacts(llm, tokenizer, output_dir: Path, save_tokenizer: bool, metadata: dict) -> None:
+    """Persist the final LoRA adapter, optional tokenizer, and run metadata locally."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    llm.save_pretrained(str(output_dir))
+    if save_tokenizer:
+        tokenizer.save_pretrained(str(output_dir))
+    (output_dir / "training_metadata.json").write_text(
+        json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
 
 if __name__ == '__main__':
+    # Heavy dependencies stay inside the executable path so helper functions can be unit-tested without a GPU stack.
+    from transformers import set_seed
+    from llm_recovery.fine_tuning.examples_dataset import ExamplesDataset
+    from llm_recovery.fine_tuning.lora import LORA
+    from llm_recovery.load_llm.load_llm import LoadLLM
+    import llm_recovery.constants.constants as constants
+
+    args = parse_args()
     seed = 99125
     set_seed(seed)
     device_map = "auto"
+    if args.preprocess_kg_rag_data:
+        summary = preprocess_kg_rag_dataset(
+            data_file=args.data_file,
+            output_path=Path(args.preprocessed_full_data_file),
+            limit=args.limit,
+            kg_depth=args.kg_depth,
+            train_output_path=Path(args.processed_data_file),
+            test_output_path=Path(args.test_data_file),
+            test_ratio=args.test_ratio,
+            split_seed=args.split_seed,
+        )
+        print(f"Preprocessed KG-RAG training data: {summary}")
+
     tokenizer, llm = LoadLLM.load_llm(llm_name=constants.LLM.DEEPSEEK_14B_QWEN, device_map=device_map)
-    dataset = load_dataset("kimhammar/CSLE-IncidentResponse-V1", data_files="examples_16_june.json")
-    instructions = dataset["train"]["instructions"][0][0:5]
-    answers = dataset["train"]["answers"][0][0:5]
+    instructions, answers, enrichment_metadata = load_training_examples(
+        mode=args.dataset_mode,
+        data_file=args.data_file,
+        processed_data_file=args.processed_data_file,
+        limit=args.limit,
+    )
+    if enrichment_metadata:
+        failed = [item["validation"] for item in enrichment_metadata if not item["validation"]["ok"]]
+        if failed:
+            raise ValueError(f"KG-RAG enrichment validation failed: {failed}")
+        print(f"Using KG-RAG-enriched training dataset with {len(instructions)} examples from {args.processed_data_file}.")
+    else:
+        print(f"Using original training dataset with {len(instructions)} examples from {args.data_file}.")
     lora_rank = 64
     lora_alpha = 128
     lora_dropout = 0.05
@@ -41,3 +135,24 @@ if __name__ == '__main__':
                                 save_steps=save_steps, save_limit=save_limit,
                                 gradient_accumulation_steps=gradient_accumulation_steps,
                                 progress_save_frequency=progress_save_frequency, seed=seed)
+    if args.save_local_model:
+        save_fine_tuned_artifacts(
+            llm=llm,
+            tokenizer=tokenizer,
+            output_dir=args.model_output_dir,
+            save_tokenizer=args.save_tokenizer,
+            metadata={
+                "dataset_mode": args.dataset_mode,
+                "data_file": args.data_file,
+                "processed_data_file": args.processed_data_file,
+                "test_data_file": args.test_data_file,
+                "test_ratio": args.test_ratio,
+                "split_seed": args.split_seed,
+                "num_training_examples": len(instructions),
+                "lora_rank": lora_rank,
+                "lora_alpha": lora_alpha,
+                "lora_dropout": lora_dropout,
+                "seed": seed,
+            },
+        )
+        print(f"Saved final fine-tuned model to {args.model_output_dir}.")
