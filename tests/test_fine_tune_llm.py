@@ -1,6 +1,6 @@
 import json
 
-from fine_tune_llm import DEFAULT_MODEL_OUTPUT_DIR, parse_args, save_fine_tuned_artifacts
+from fine_tune_llm import DEFAULT_MODEL_OUTPUT_DIR, parse_args, save_fine_tuned_artifacts, training_data_file_for_mode
 
 
 class _FakeModel:
@@ -55,3 +55,8 @@ def test_model_output_arguments_default_to_local_saving(monkeypatch, tmp_path):
     assert args.split_seed == 99125
     assert args.processed_data_file.endswith("_train.json")
     assert args.test_data_file.endswith("_test.json")
+    assert args.original_train_data_file.endswith("original_train.json")
+    assert training_data_file_for_mode(args) == args.original_train_data_file
+
+    args.dataset_mode = "kg_rag"
+    assert training_data_file_for_mode(args) == args.processed_data_file

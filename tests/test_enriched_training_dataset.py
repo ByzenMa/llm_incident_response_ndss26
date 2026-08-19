@@ -11,6 +11,7 @@ from enriched_training_dataset import (
     preprocess_kg_rag_dataset,
     split_and_save_training_examples,
     split_training_examples,
+    save_paired_original_and_kg_rag_splits,
 )
 
 
@@ -116,3 +117,27 @@ def test_split_and_save_writes_separate_local_files(tmp_path):
 def test_split_rejects_invalid_ratio(ratio):
     with pytest.raises(ValueError, match="test_ratio"):
         split_training_examples(["i0", "i1"], ["a0", "a1"], [], test_ratio=ratio)
+
+
+def test_original_and_kg_rag_splits_have_matching_source_indices(tmp_path):
+    paths = [tmp_path / name for name in ("original_train.json", "original_test.json", "kg_train.json", "kg_test.json")]
+    summary = save_paired_original_and_kg_rag_splits(
+        [f"original-{index}" for index in range(8)],
+        [f"enriched-{index}" for index in range(8)],
+        [f"answer-{index}" for index in range(8)],
+        [{"source_index": index, "kg_rag": {"index": index}} for index in range(8)],
+        *paths,
+        test_ratio=0.25,
+        seed=11,
+    )
+
+    original_train = load_preprocessed_kg_rag_examples(str(paths[0]))
+    original_test = load_preprocessed_kg_rag_examples(str(paths[1]))
+    kg_train = load_preprocessed_kg_rag_examples(str(paths[2]))
+    kg_test = load_preprocessed_kg_rag_examples(str(paths[3]))
+    assert [item["source_index"] for item in original_train[2]] == [item["source_index"] for item in kg_train[2]]
+    assert [item["source_index"] for item in original_test[2]] == [item["source_index"] for item in kg_test[2]]
+    assert original_train[1] == kg_train[1]
+    assert original_test[1] == kg_test[1]
+    assert set(summary["train_source_indices"]).isdisjoint(summary["test_source_indices"])
+    assert set(summary["train_source_indices"] + summary["test_source_indices"]) == set(range(8))

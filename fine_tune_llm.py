@@ -7,6 +7,8 @@ from enriched_training_dataset import (
     DEFAULT_KG_RAG_DATA_FILE,
     DEFAULT_KG_RAG_TEST_FILE,
     DEFAULT_KG_RAG_TRAIN_FILE,
+    DEFAULT_ORIGINAL_TEST_FILE,
+    DEFAULT_ORIGINAL_TRAIN_FILE,
     KG_RAG_MODE,
     ORIGINAL_MODE,
     load_training_examples,
@@ -26,6 +28,8 @@ def parse_args():
         help="Use the original examples_16_june.json pairs or a local KG-RAG-enriched JSON file.",
     )
     parser.add_argument("--data-file", default=DEFAULT_DATA_FILE, help="Original CSLE-IncidentResponse data file; defaults to examples_16_june.json.")
+    parser.add_argument("--original-train-data-file", default=DEFAULT_ORIGINAL_TRAIN_FILE, help="Original-mode training split aligned with the KG-RAG training split.")
+    parser.add_argument("--original-test-data-file", default=DEFAULT_ORIGINAL_TEST_FILE, help="Original-mode held-out split aligned with the KG-RAG test split.")
     parser.add_argument("--processed-data-file", default=DEFAULT_KG_RAG_TRAIN_FILE, help="Local KG-RAG training split read when --dataset-mode kg_rag is used.")
     parser.add_argument("--preprocessed-full-data-file", default=DEFAULT_KG_RAG_DATA_FILE, help="Local file containing all preprocessed examples before splitting.")
     parser.add_argument("--test-data-file", default=DEFAULT_KG_RAG_TEST_FILE, help="Local held-out split written during preprocessing.")
@@ -68,6 +72,11 @@ def save_fine_tuned_artifacts(llm, tokenizer, output_dir: Path, save_tokenizer: 
     )
 
 
+def training_data_file_for_mode(args) -> str:
+    """Select the paired training split without falling back to the full source data."""
+    return args.original_train_data_file if args.dataset_mode == ORIGINAL_MODE else args.processed_data_file
+
+
 if __name__ == '__main__':
     # Heavy dependencies stay inside the executable path so helper functions can be unit-tested without a GPU stack.
     from transformers import set_seed
@@ -90,13 +99,16 @@ if __name__ == '__main__':
             test_output_path=Path(args.test_data_file),
             test_ratio=args.test_ratio,
             split_seed=args.split_seed,
+            original_train_output_path=Path(args.original_train_data_file),
+            original_test_output_path=Path(args.original_test_data_file),
         )
         print(f"Preprocessed KG-RAG training data: {summary}")
 
     tokenizer, llm = LoadLLM.load_llm(llm_name=constants.LLM.DEEPSEEK_14B_QWEN, device_map=device_map)
+    training_data_file = training_data_file_for_mode(args)
     instructions, answers, enrichment_metadata = load_training_examples(
         mode=args.dataset_mode,
-        data_file=args.data_file,
+        data_file=training_data_file,
         processed_data_file=args.processed_data_file,
         limit=args.limit,
     )
@@ -106,7 +118,7 @@ if __name__ == '__main__':
             raise ValueError(f"KG-RAG enrichment validation failed: {failed}")
         print(f"Using KG-RAG-enriched training dataset with {len(instructions)} examples from {args.processed_data_file}.")
     else:
-        print(f"Using original training dataset with {len(instructions)} examples from {args.data_file}.")
+        print(f"Using original training dataset with {len(instructions)} examples from {training_data_file}.")
     lora_rank = 64
     lora_alpha = 128
     lora_dropout = 0.05
@@ -144,6 +156,8 @@ if __name__ == '__main__':
             metadata={
                 "dataset_mode": args.dataset_mode,
                 "data_file": args.data_file,
+                "original_train_data_file": args.original_train_data_file,
+                "original_test_data_file": args.original_test_data_file,
                 "processed_data_file": args.processed_data_file,
                 "test_data_file": args.test_data_file,
                 "test_ratio": args.test_ratio,

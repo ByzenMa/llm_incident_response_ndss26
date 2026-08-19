@@ -313,7 +313,9 @@ and mismatched paired record IDs to prevent comparison over different prompts.
 `enriched_training_dataset.py` chains the stage-2 log parser and stage-3 KG-RAG builder before training. It reads the original `examples_16_june.json` examples, parses each instruction into structured incident JSON, retrieves KG-RAG security context, validates the incident/KG links, and saves a local training file that keeps the same `instructions`/`answers` shape expected by `fine_tune_llm.py`.
 
 Preprocess first, deterministically split the enriched examples, and save the
-full, training, and held-out test files separately. `--test-ratio` is
+full, training, and held-out test files separately. The command also saves
+original-mode train/test files using exactly the same source indices, so every
+original record has a one-to-one KG-RAG counterpart. `--test-ratio` is
 configurable between 0 and 1, and `--split-seed` makes the split reproducible:
 
 ```bash
@@ -322,6 +324,8 @@ python enriched_training_dataset.py \
   --output examples_16_june_kg_rag.json \
   --train-output examples_16_june_kg_rag_train.json \
   --test-output examples_16_june_kg_rag_test.json \
+  --original-train-output examples_16_june_original_train.json \
+  --original-test-output examples_16_june_original_test.json \
   --test-ratio 0.2 \
   --split-seed 99125 \
   --kg-depth 2
@@ -336,9 +340,12 @@ python fine_tune_llm.py --dataset-mode kg_rag \
 
 For convenience, `fine_tune_llm.py` also has `--preprocess-kg-rag-data`, which
 first writes the full preprocessed file, `--processed-data-file` training split,
-and `--test-data-file` held-out split. It then loads only the saved training
-split. Configure the split with `--test-ratio` and `--split-seed`. No test
-examples are processed inline during model training.
+and `--test-data-file` held-out split, together with the paired
+`--original-train-data-file` and `--original-test-data-file`. Original mode
+loads only the original training split, while KG-RAG mode loads only the KG-RAG
+training split. Both variants retain the same `source_index`, answer, split
+membership, and KG metadata. Configure the split with `--test-ratio` and
+`--split-seed`. No test examples are processed inline during model training.
 
 ### Generate predictions on the held-out test set
 

@@ -28,6 +28,8 @@ DEFAULT_DATA_FILE = "examples_16_june.json"
 DEFAULT_KG_RAG_DATA_FILE = "examples_16_june_kg_rag.json"
 DEFAULT_KG_RAG_TRAIN_FILE = "examples_16_june_kg_rag_train.json"
 DEFAULT_KG_RAG_TEST_FILE = "examples_16_june_kg_rag_test.json"
+DEFAULT_ORIGINAL_TRAIN_FILE = "examples_16_june_original_train.json"
+DEFAULT_ORIGINAL_TEST_FILE = "examples_16_june_original_test.json"
 ORIGINAL_MODE = "original"
 KG_RAG_MODE = "kg_rag"
 
@@ -248,6 +250,58 @@ def split_and_save_training_examples(
     }
 
 
+def save_paired_original_and_kg_rag_splits(
+    original_instructions: Sequence[str],
+    enriched_instructions: Sequence[str],
+    answers: Sequence[str],
+    metadata: Sequence[Dict[str, Any]],
+    original_train_output_path: Path,
+    original_test_output_path: Path,
+    kg_rag_train_output_path: Path,
+    kg_rag_test_output_path: Path,
+    test_ratio: float = 0.2,
+    seed: int = 99125,
+) -> Dict[str, Any]:
+    """Save original and KG-RAG variants using exactly the same split indices."""
+    if len(original_instructions) != len(enriched_instructions):
+        raise ValueError("Original and KG-RAG instruction counts must match for paired splitting.")
+    if len(original_instructions) != len(answers) or len(metadata) != len(answers):
+        raise ValueError("Original, KG-RAG, answer, and metadata counts must match for paired splitting.")
+
+    index_metadata = []
+    for index, item in enumerate(metadata):
+        copied = dict(item)
+        copied["source_index"] = index
+        index_metadata.append(copied)
+    original_train, original_test = split_training_examples(
+        original_instructions, answers, index_metadata, test_ratio=test_ratio, seed=seed
+    )
+    kg_train, kg_test = split_training_examples(
+        enriched_instructions, answers, index_metadata, test_ratio=test_ratio, seed=seed
+    )
+    if [item["source_index"] for item in original_train[2]] != [item["source_index"] for item in kg_train[2]]:
+        raise AssertionError("Original and KG-RAG training splits are not aligned.")
+    if [item["source_index"] for item in original_test[2]] != [item["source_index"] for item in kg_test[2]]:
+        raise AssertionError("Original and KG-RAG test splits are not aligned.")
+
+    save_training_examples(original_train_output_path, *original_train)
+    save_training_examples(original_test_output_path, *original_test)
+    save_training_examples(kg_rag_train_output_path, *kg_train)
+    save_training_examples(kg_rag_test_output_path, *kg_test)
+    return {
+        "original_train_output_path": str(original_train_output_path),
+        "original_test_output_path": str(original_test_output_path),
+        "train_output_path": str(kg_rag_train_output_path),
+        "test_output_path": str(kg_rag_test_output_path),
+        "train_examples": len(original_train[0]),
+        "test_examples": len(original_test[0]),
+        "train_source_indices": [item["source_index"] for item in original_train[2]],
+        "test_source_indices": [item["source_index"] for item in original_test[2]],
+        "test_ratio": test_ratio,
+        "split_seed": seed,
+    }
+
+
 def preprocess_kg_rag_dataset(
     data_file: str = DEFAULT_DATA_FILE,
     output_path: Path = Path(DEFAULT_KG_RAG_DATA_FILE),
@@ -259,6 +313,8 @@ def preprocess_kg_rag_dataset(
     test_output_path: Optional[Path] = None,
     test_ratio: float = 0.2,
     split_seed: int = 99125,
+    original_train_output_path: Optional[Path] = None,
+    original_test_output_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """Preprocess examples_16_june.json into a local KG-RAG training file."""
     _print_progress(f"Loading source examples from {data_file}.", show_progress)
@@ -280,19 +336,36 @@ def preprocess_kg_rag_dataset(
     split_summary = {}
     if (train_output_path is None) != (test_output_path is None):
         raise ValueError("train_output_path and test_output_path must be provided together.")
+    original_paths_present = original_train_output_path is not None or original_test_output_path is not None
+    if original_paths_present and (original_train_output_path is None or original_test_output_path is None):
+        raise ValueError("original_train_output_path and original_test_output_path must be provided together.")
     if train_output_path is not None and test_output_path is not None:
         _print_progress(
             f"Splitting data with test_ratio={test_ratio} and seed={split_seed}.", show_progress
         )
-        split_summary = split_and_save_training_examples(
-            enriched_instructions,
-            enriched_answers,
-            metadata,
-            train_output_path,
-            test_output_path,
-            test_ratio=test_ratio,
-            seed=split_seed,
-        )
+        if original_paths_present:
+            split_summary = save_paired_original_and_kg_rag_splits(
+                instructions,
+                enriched_instructions,
+                enriched_answers,
+                metadata,
+                original_train_output_path,
+                original_test_output_path,
+                train_output_path,
+                test_output_path,
+                test_ratio=test_ratio,
+                seed=split_seed,
+            )
+        else:
+            split_summary = split_and_save_training_examples(
+                enriched_instructions,
+                enriched_answers,
+                metadata,
+                train_output_path,
+                test_output_path,
+                test_ratio=test_ratio,
+                seed=split_seed,
+            )
     _print_progress("Preprocessing finished successfully.", show_progress)
     return {
         "source_data_file": data_file,
@@ -344,6 +417,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path(DEFAULT_KG_RAG_DATA_FILE), help="Local file to save preprocessed KG-RAG training data.")
     parser.add_argument("--train-output", type=Path, default=Path(DEFAULT_KG_RAG_TRAIN_FILE), help="Local training split output.")
     parser.add_argument("--test-output", type=Path, default=Path(DEFAULT_KG_RAG_TEST_FILE), help="Local held-out test split output.")
+    parser.add_argument("--original-train-output", type=Path, default=Path(DEFAULT_ORIGINAL_TRAIN_FILE), help="Original-mode training split paired with --train-output.")
+    parser.add_argument("--original-test-output", type=Path, default=Path(DEFAULT_ORIGINAL_TEST_FILE), help="Original-mode test split paired with --test-output.")
     parser.add_argument("--test-ratio", type=float, default=0.2, help="Fraction reserved for testing (0 < ratio < 1).")
     parser.add_argument("--split-seed", type=int, default=99125, help="Random seed for reproducible splitting.")
     parser.add_argument("--progress-interval", type=int, default=25, help="Print enrichment progress every N examples.")
@@ -355,7 +430,13 @@ def main() -> None:
         _print_progress(f"Saving {len(instructions)} original examples to {args.output}.")
         save_training_examples(args.output, instructions, answers, [])
         split_summary = split_and_save_training_examples(
-            instructions, answers, [], args.train_output, args.test_output, args.test_ratio, args.split_seed
+            instructions,
+            answers,
+            [],
+            args.original_train_output,
+            args.original_test_output,
+            args.test_ratio,
+            args.split_seed,
         )
         summary = {"mode": args.mode, "output_path": str(args.output), "num_instructions": len(instructions), "num_answers": len(answers), **split_summary}
     else:
@@ -369,6 +450,8 @@ def main() -> None:
             test_output_path=args.test_output,
             test_ratio=args.test_ratio,
             split_seed=args.split_seed,
+            original_train_output_path=args.original_train_output,
+            original_test_output_path=args.original_test_output,
         )
         summary["mode"] = args.mode
     print(json.dumps(summary, indent=2, ensure_ascii=False))
