@@ -127,6 +127,260 @@ I recognize that while the attack is contained, I do not yet have enough informa
 }⏎
 ```
 
+
+### Action schema event parser
+
+This repository also includes `action_schema_parser.py`, a lightweight parser for normalizing incident-response actions from the [`kimhammar/CSLE-IncidentResponse-V1`](https://huggingface.co/datasets/kimhammar/CSLE-IncidentResponse-V1) dataset or from compatible LLM outputs. The parser converts JSON-like answers such as `Action`/`Explanation` records and free-form response text into a unified action schema with the following modules:
+
+- `action_type`: inferred or explicit response category, such as `containment`, `evidence_acquisition`, `eradication`, `recovery`, `investigation`, `notification`, or `monitoring`.
+- `target`: affected hosts, IPs, users, files, services, or other assets found in the action.
+- `command`: shell, PowerShell, cloud, Kubernetes, or other operational commands found in the action.
+- `precondition`: prerequisites or conditions that should be satisfied before execution.
+- `risk`: operational, forensic, or business risks associated with the action.
+- `rollback`: backout or recovery instructions.
+- `evidence`: logs, images, snapshots, alerts, or other artifacts supporting the action.
+- `source_action` and `source_explanation`: original dataset/model text retained for traceability.
+
+Examples:
+
+```bash
+python action_schema_parser.py --text '{"Action":"Acquire full disk and memory images of 10.20.11.42 and export DNS, firewall, and NetFlow logs to write-protected storage.","Explanation":"Capturing images and logs secures evidence for later analysis and legal requirements."}'
+```
+
+```bash
+python action_schema_parser.py --from-dataset --data-file examples_16_june.json --limit 10
+```
+
+If you use `--from-dataset`, install the optional Hugging Face dependency first, for example with the repository's existing `llm_recovery` installation path or by installing `datasets` directly.
+
+
+### Log/alert parsing into structured incident JSON
+
+`incident_log_parser.py` implements the second pipeline stage: it parses raw logs or alerts and extracts indicators of compromise (IOCs), CVEs, assets, services, and likely attack stages into a structured incident JSON document. The parser is deterministic and dependency-light so it can be used before model prompting, response-plan generation, or retrieval.
+
+The generated incident JSON contains:
+
+- `incident_id`, `observed_at`, `summary`, `severity`, and `raw_events` for incident tracking.
+- `iocs` with typed values such as IPv4, IPv6, URL, domain, email, hashes, and file paths.
+- `cves` normalized as `CVE-YYYY-NNNN...` identifiers.
+- `assets` extracted from host, asset, server, endpoint, account, and user fields.
+- `services` inferred from service names, ports, and product hints such as SSH, RDP, HTTP(S), DNS, SMB, database, email, Kubernetes, and AWS.
+- `attack_stages` mapped to incident-response-friendly stages aligned with MITRE ATT&CK tactics such as initial access, execution, credential access, lateral movement, command and control, exfiltration, and impact.
+
+Example:
+
+```bash
+python incident_log_parser.py --incident-id inc-demo --text 'critical ssh brute force login failed src=203.0.113.10 host=web-01 service=sshd CVE-2024-12345'
+```
+
+### KG-RAG security context
+
+`kg_rag.py` implements the third pipeline stage: it builds an in-memory security knowledge graph and retrieves a structured KG-RAG context for response planning. The graph connects incident facts with the following node types:
+
+- `incident`
+- `ioc`
+- `cve`
+- `asset`
+- `service`
+- `attack_stage`
+- `mitre_attack`
+- `mitigation`
+- `security_rule`
+
+The reference graph uses edges such as `mentions_cve`, `affects_asset`, `involves_service`, `has_ioc`, `has_attack_stage`, `maps_to_attack`, `has_mitigation`, and `monitored_by`. The output includes raw graph nodes/edges, ranked mitigation or detection recommendations, and a `prompt_context` string that can be passed to the response-generation LLM.
+
+Examples:
+
+```bash
+python kg_rag.py --incident-id inc-kg --text 'CVE-2023-34362 exploit against host=moveit-01 http service followed by data exfil upload'
+```
+
+```bash
+python incident_log_parser.py --input alerts.log --incident-id inc-001 > incident.json
+python kg_rag.py --incident-json incident.json --depth 2
+```
+
+#### Code references
+
+- `incident_log_parser.py`: log and alert parsing, IOC/CVE/asset/service/stage extraction, and incident JSON serialization.
+- `kg_rag.py`: in-memory knowledge graph construction, MITRE ATT&CK/stage linking, mitigation/security-rule linking, and prompt-context retrieval.
+- `action_schema_parser.py`: downstream normalization of generated response actions into the action schema.
+
+#### References for extending the parser and KG-RAG graph
+
+- Hugging Face dataset: [`kimhammar/CSLE-IncidentResponse-V1`](https://huggingface.co/datasets/kimhammar/CSLE-IncidentResponse-V1).
+- MITRE ATT&CK Enterprise Matrix: <https://attack.mitre.org/matrices/enterprise/>.
+- MITRE ATT&CK Techniques: <https://attack.mitre.org/techniques/enterprise/>.
+- MITRE D3FEND countermeasure knowledge graph: <https://d3fend.mitre.org/>.
+- NIST National Vulnerability Database (NVD): <https://nvd.nist.gov/>.
+- Common Vulnerabilities and Exposures (CVE): <https://www.cve.org/>.
+- Sigma generic SIEM rule format: <https://sigmahq.io/>.
+- STIX 2.1 specification for cyber threat intelligence objects and relationships: <https://docs.oasis-open.org/cti/stix/v2.1/stix-v2.1.html>.
+
+
+
+
+### Generation post-processing safety gate
+
+When a model has been fine-tuned with KG-RAG-enriched examples, generation should still be validated before any response action is executed. `response_post_processor.py` implements a deterministic post-processing gate that normalizes generated actions with `action_schema_parser.py` and checks:
+
+- **CVE authenticity/plausibility**: validates CVE identifier format and year range, and warns when a referenced CVE is not present in the KG-RAG context or an explicit allow-list.
+- **Command syntax**: parses shell-like commands with `shlex` and warns on executables outside the incident-response command allow-list.
+- **Policy constraints**: blocks high-risk destructive commands such as root recursive deletion, raw disk overwrite, filesystem formatting, firewall flush/disable, and reboot/shutdown actions; destructive/recovery actions must include rollback guidance.
+- **Attack-path validation**: compares generated MITRE ATT&CK technique IDs or attack-stage mentions with the KG-RAG context to reduce unsupported attack-path claims.
+
+Run post-processing directly on generated text:
+
+```bash
+python response_post_processor.py \
+  --generation '{"Action":"Run `tcpdump -i eth0 host moveit-01` for CVE-2023-34362 evidence.","Explanation":"Maps to T1190; rollback by deleting the temporary capture."}' \
+  --kg-context incident_security_context.json
+```
+
+Or enable the post-processing stage in `response_generation.py` after loading either the published model or a locally saved fine-tuned model:
+
+```bash
+python response_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --dataset-mode kg_rag \
+  --processed-data-file examples_16_june_kg_rag.json \
+  --kg-context incident_security_context.json \
+  --enable-post-processing \
+  --post-processed-output generation_postprocess_report.json
+```
+
+The report contains accepted actions, blocked actions, all findings, and a summary. Treat `error` findings as blocking issues that require human review or regeneration, and treat `warning` findings as verification tasks before execution.
+
+### Response quality and safety evaluation
+
+`response_evaluation.py` evaluates saved model generations with the same rules
+as the generation post-processing gate. It reports three aggregate metrics and
+retains per-action findings for audit and error analysis:
+
+- **Hallucinated action rate** = actions containing a malformed, implausible,
+  or KG-untrusted CVE, or an ATT&CK technique not linked to the incident KG,
+  divided by all generated actions. Missing path references are reported by the
+  safety gate but are not counted as fabricated claims.
+- **Incorrect command rate** = commands that cannot be parsed or whose
+  executable is outside the incident-response allow-list, divided by all
+  generated commands. Actions without commands do not affect this denominator.
+- **Unsafe action rate** = actions with a blocking policy violation, such as a
+  prohibited destructive command or a destructive/recovery action without a
+  rollback plan, divided by all generated actions.
+
+Create a JSON array or JSONL file in which every record contains `generation`
+(or `generated_response`, `response`, or `actions`) and may contain the matching
+`kg_context`/`security_context`. Then run:
+
+```bash
+python response_evaluation.py \
+  --input generated_responses.jsonl \
+  --output evaluation_report.json
+```
+
+The report includes each metric's numerator, denominator, and rate. Keep each
+generation paired with the KG context retrieved for that incident so that CVE
+and attack-path support are evaluated against the context actually presented to
+the model.
+
+#### Comparing the base and KG-RAG-fine-tuned models
+
+Generate responses from both models for the same ordered evaluation prompts,
+and save them as `base_generations.jsonl` and `kg_rag_generations.jsonl`. Every
+corresponding record should use the same `id` (or `record_id`, `incident_id`, or
+`prompt_id`) and the same retrieved KG context. Then compare the three metrics:
+
+```bash
+python response_model_comparison.py \
+  --baseline-input base_generations.jsonl \
+  --candidate-input kg_rag_generations.jsonl \
+  --baseline-name deepseek-base \
+  --candidate-name csle-kg-rag-lora \
+  --output model_comparison_report.json
+```
+
+For every metric, the report contains the base and fine-tuned rates,
+`absolute_change` (fine-tuned minus base), `absolute_improvement` (base minus
+fine-tuned), and `relative_reduction` (`absolute_improvement / base`). Because
+all three metrics are error rates, a positive improvement or relative reduction
+indicates that the KG-RAG-fine-tuned model performed better. Relative reduction
+is `null` when the base rate is zero. The command rejects unequal record counts
+and mismatched paired record IDs to prevent comparison over different prompts.
+
+
+### Preprocessing `examples_16_june.json` for KG-RAG fine-tuning
+
+`enriched_training_dataset.py` chains the stage-2 log parser and stage-3 KG-RAG builder before training. It reads the original `examples_16_june.json` examples, parses each instruction into structured incident JSON, retrieves KG-RAG security context, validates the incident/KG links, and saves a local training file that keeps the same `instructions`/`answers` shape expected by `fine_tune_llm.py`.
+
+Preprocess first, deterministically split the enriched examples, and save the
+full, training, and held-out test files separately. The command also saves
+original-mode train/test files using exactly the same source indices, so every
+original record has a one-to-one KG-RAG counterpart. `--test-ratio` is
+configurable between 0 and 1, and `--split-seed` makes the split reproducible:
+
+```bash
+python enriched_training_dataset.py \
+  --data-file examples_16_june.json \
+  --output examples_16_june_kg_rag.json \
+  --train-output examples_16_june_kg_rag_train.json \
+  --test-output examples_16_june_kg_rag_test.json \
+  --original-train-output examples_16_june_original_train.json \
+  --original-test-output examples_16_june_original_test.json \
+  --test-ratio 0.2 \
+  --split-seed 99125 \
+  --kg-depth 2
+```
+
+Then train from the saved file instead of enriching examples during training:
+
+```bash
+python fine_tune_llm.py --dataset-mode kg_rag \
+  --processed-data-file examples_16_june_kg_rag_train.json
+```
+
+For convenience, `fine_tune_llm.py` also has `--preprocess-kg-rag-data`, which
+first writes the full preprocessed file, `--processed-data-file` training split,
+and `--test-data-file` held-out split, together with the paired
+`--original-train-data-file` and `--original-test-data-file`. Original mode
+loads only the original training split, while KG-RAG mode loads only the KG-RAG
+training split. Both variants retain the same `source_index`, answer, split
+membership, and KG metadata. Configure the split with `--test-ratio` and
+`--split-seed`. No test examples are processed inline during model training.
+
+### Generate predictions on the held-out test set
+
+`model_test_generation.py` loads the separately saved test split, invokes a
+base or locally saved fine-tuned model for every instruction, and writes JSONL
+records containing the prompt, expected answer, raw generation, matching KG
+context, and post-processing report. Safety post-processing is enabled by
+default:
+
+```bash
+python model_test_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --test-data-file examples_16_june_kg_rag_test.json \
+  --output kg_rag_test_predictions.jsonl \
+  --progress-interval 1
+```
+
+Use `--no-post-processing` when raw predictions are required. The raw
+`generation` is always retained, so prediction files can be consumed directly
+by `response_evaluation.py` and `response_model_comparison.py` regardless of
+whether post-processing was enabled. Test progress is printed by default before
+and after configured examples, including the current/total count,
+`source_index`, and post-processing status. Set `--progress-interval N` to print
+every N examples, or use `--no-progress` to suppress progress output.
+
+After training, the LoRA adapter, tokenizer, and `training_metadata.json` are saved locally by default in `fine_tuned_models/deepseek-r1-distill-qwen-14b-lora`. Set `--model-output-dir` to select another local destination:
+
+```bash
+python fine_tune_llm.py --dataset-mode kg_rag \
+  --processed-data-file examples_16_june_kg_rag_train.json \
+  --model-output-dir ./models/csle-kg-rag-lora
+```
+
+Use `--no-save-tokenizer` to omit tokenizer files, or `--no-save-local-model` to disable final artifact saving.
+
 ### Fine-tuning DeepSeek-R1-Distill-Qwen-14B on our incident response dataset
 
 Command:
