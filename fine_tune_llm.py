@@ -5,6 +5,8 @@ from pathlib import Path
 from enriched_training_dataset import (
     DEFAULT_DATA_FILE,
     DEFAULT_KG_RAG_DATA_FILE,
+    DEFAULT_KG_RAG_TEST_FILE,
+    DEFAULT_KG_RAG_TRAIN_FILE,
     KG_RAG_MODE,
     ORIGINAL_MODE,
     load_training_examples,
@@ -24,7 +26,11 @@ def parse_args():
         help="Use the original examples_16_june.json pairs or a local KG-RAG-enriched JSON file.",
     )
     parser.add_argument("--data-file", default=DEFAULT_DATA_FILE, help="Original CSLE-IncidentResponse data file; defaults to examples_16_june.json.")
-    parser.add_argument("--processed-data-file", default=DEFAULT_KG_RAG_DATA_FILE, help="Local preprocessed KG-RAG JSON file read when --dataset-mode kg_rag is used.")
+    parser.add_argument("--processed-data-file", default=DEFAULT_KG_RAG_TRAIN_FILE, help="Local KG-RAG training split read when --dataset-mode kg_rag is used.")
+    parser.add_argument("--preprocessed-full-data-file", default=DEFAULT_KG_RAG_DATA_FILE, help="Local file containing all preprocessed examples before splitting.")
+    parser.add_argument("--test-data-file", default=DEFAULT_KG_RAG_TEST_FILE, help="Local held-out split written during preprocessing.")
+    parser.add_argument("--test-ratio", type=float, default=0.2, help="Fraction of preprocessed examples reserved for testing.")
+    parser.add_argument("--split-seed", type=int, default=99125, help="Seed used for reproducible train/test splitting.")
     parser.add_argument("--preprocess-kg-rag-data", action="store_true", help="Preprocess --data-file into --processed-data-file before loading it for training.")
     parser.add_argument("--limit", type=int, default=5, help="Number of examples to fine-tune on; preserves the previous default of 5.")
     parser.add_argument("--kg-depth", type=int, default=2, help="KG neighborhood depth used only during preprocessing.")
@@ -77,9 +83,13 @@ if __name__ == '__main__':
     if args.preprocess_kg_rag_data:
         summary = preprocess_kg_rag_dataset(
             data_file=args.data_file,
-            output_path=Path(args.processed_data_file),
+            output_path=Path(args.preprocessed_full_data_file),
             limit=args.limit,
             kg_depth=args.kg_depth,
+            train_output_path=Path(args.processed_data_file),
+            test_output_path=Path(args.test_data_file),
+            test_ratio=args.test_ratio,
+            split_seed=args.split_seed,
         )
         print(f"Preprocessed KG-RAG training data: {summary}")
 
@@ -135,6 +145,9 @@ if __name__ == '__main__':
                 "dataset_mode": args.dataset_mode,
                 "data_file": args.data_file,
                 "processed_data_file": args.processed_data_file,
+                "test_data_file": args.test_data_file,
+                "test_ratio": args.test_ratio,
+                "split_seed": args.split_seed,
                 "num_training_examples": len(instructions),
                 "lora_rank": lora_rank,
                 "lora_alpha": lora_alpha,

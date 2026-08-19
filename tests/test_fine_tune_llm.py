@@ -51,3 +51,7 @@ def test_model_output_arguments_default_to_local_saving(monkeypatch, tmp_path):
     assert args.model_output_dir == output_dir
     assert args.save_local_model is True
     assert args.save_tokenizer is True
+    assert args.test_ratio == 0.2
+    assert args.split_seed == 99125
+    assert args.processed_data_file.endswith("_train.json")
+    assert args.test_data_file.endswith("_test.json")

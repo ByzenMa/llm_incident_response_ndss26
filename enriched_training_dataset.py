@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -25,6 +26,8 @@ except ImportError:  # pragma: no cover - optional dependency for Hugging Face l
 DATASET_NAME = "kimhammar/CSLE-IncidentResponse-V1"
 DEFAULT_DATA_FILE = "examples_16_june.json"
 DEFAULT_KG_RAG_DATA_FILE = "examples_16_june_kg_rag.json"
+DEFAULT_KG_RAG_TRAIN_FILE = "examples_16_june_kg_rag_train.json"
+DEFAULT_KG_RAG_TEST_FILE = "examples_16_june_kg_rag_test.json"
 ORIGINAL_MODE = "original"
 KG_RAG_MODE = "kg_rag"
 
@@ -185,7 +188,64 @@ def validate_enrichment(incident: IncidentJSON, context: Dict[str, Any]) -> Dict
 def save_training_examples(output_path: Path, instructions: Sequence[str], answers: Sequence[str], metadata: Sequence[Dict[str, Any]]) -> None:
     """Persist examples in the same top-level shape used by the HF dataset."""
     output = {"instructions": [list(instructions)], "answers": [list(answers)], "metadata": [list(metadata)]}
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def split_training_examples(
+    instructions: Sequence[str],
+    answers: Sequence[str],
+    metadata: Sequence[Dict[str, Any]],
+    test_ratio: float = 0.2,
+    seed: int = 99125,
+) -> Tuple[Tuple[List[str], List[str], List[Dict[str, Any]]], Tuple[List[str], List[str], List[Dict[str, Any]]]]:
+    """Deterministically split aligned examples into non-empty train and test sets."""
+    if not 0.0 < test_ratio < 1.0:
+        raise ValueError("test_ratio must be greater than 0 and less than 1.")
+    if len(instructions) != len(answers):
+        raise ValueError(f"Instruction/answer length mismatch: {len(instructions)} != {len(answers)}")
+    if metadata and len(metadata) != len(instructions):
+        raise ValueError(f"Metadata/example length mismatch: {len(metadata)} != {len(instructions)}")
+    if len(instructions) < 2:
+        raise ValueError("At least two examples are required to create non-empty train and test sets.")
+
+    indices = list(range(len(instructions)))
+    random.Random(seed).shuffle(indices)
+    test_count = max(1, min(len(indices) - 1, round(len(indices) * test_ratio)))
+    test_indices = set(indices[:test_count])
+
+    def select(want_test: bool):
+        selected = [index for index in range(len(instructions)) if (index in test_indices) == want_test]
+        return (
+            [instructions[index] for index in selected],
+            [answers[index] for index in selected],
+            [metadata[index] for index in selected] if metadata else [],
+        )
+
+    return select(False), select(True)
+
+
+def split_and_save_training_examples(
+    instructions: Sequence[str],
+    answers: Sequence[str],
+    metadata: Sequence[Dict[str, Any]],
+    train_output_path: Path,
+    test_output_path: Path,
+    test_ratio: float = 0.2,
+    seed: int = 99125,
+) -> Dict[str, Any]:
+    """Split an already-preprocessed dataset and persist both subsets locally."""
+    train, test = split_training_examples(instructions, answers, metadata, test_ratio=test_ratio, seed=seed)
+    save_training_examples(train_output_path, *train)
+    save_training_examples(test_output_path, *test)
+    return {
+        "train_output_path": str(train_output_path),
+        "test_output_path": str(test_output_path),
+        "train_examples": len(train[0]),
+        "test_examples": len(test[0]),
+        "test_ratio": test_ratio,
+        "split_seed": seed,
+    }
 
 
 def preprocess_kg_rag_dataset(
@@ -195,6 +255,10 @@ def preprocess_kg_rag_dataset(
     kg_depth: int = 2,
     show_progress: bool = True,
     progress_interval: int = 25,
+    train_output_path: Optional[Path] = None,
+    test_output_path: Optional[Path] = None,
+    test_ratio: float = 0.2,
+    split_seed: int = 99125,
 ) -> Dict[str, Any]:
     """Preprocess examples_16_june.json into a local KG-RAG training file."""
     _print_progress(f"Loading source examples from {data_file}.", show_progress)
@@ -213,6 +277,22 @@ def preprocess_kg_rag_dataset(
         raise ValueError(f"KG-RAG enrichment validation failed: {validation_errors}")
     _print_progress(f"Saving preprocessed KG-RAG training data to {output_path}.", show_progress)
     save_training_examples(output_path, enriched_instructions, enriched_answers, metadata)
+    split_summary = {}
+    if (train_output_path is None) != (test_output_path is None):
+        raise ValueError("train_output_path and test_output_path must be provided together.")
+    if train_output_path is not None and test_output_path is not None:
+        _print_progress(
+            f"Splitting data with test_ratio={test_ratio} and seed={split_seed}.", show_progress
+        )
+        split_summary = split_and_save_training_examples(
+            enriched_instructions,
+            enriched_answers,
+            metadata,
+            train_output_path,
+            test_output_path,
+            test_ratio=test_ratio,
+            seed=split_seed,
+        )
     _print_progress("Preprocessing finished successfully.", show_progress)
     return {
         "source_data_file": data_file,
@@ -220,6 +300,7 @@ def preprocess_kg_rag_dataset(
         "num_instructions": len(enriched_instructions),
         "num_answers": len(enriched_answers),
         "validation_errors": validation_errors,
+        **split_summary,
     }
 
 
@@ -261,6 +342,10 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--kg-depth", type=int, default=2)
     parser.add_argument("--output", type=Path, default=Path(DEFAULT_KG_RAG_DATA_FILE), help="Local file to save preprocessed KG-RAG training data.")
+    parser.add_argument("--train-output", type=Path, default=Path(DEFAULT_KG_RAG_TRAIN_FILE), help="Local training split output.")
+    parser.add_argument("--test-output", type=Path, default=Path(DEFAULT_KG_RAG_TEST_FILE), help="Local held-out test split output.")
+    parser.add_argument("--test-ratio", type=float, default=0.2, help="Fraction reserved for testing (0 < ratio < 1).")
+    parser.add_argument("--split-seed", type=int, default=99125, help="Random seed for reproducible splitting.")
     parser.add_argument("--progress-interval", type=int, default=25, help="Print enrichment progress every N examples.")
     args = parser.parse_args()
 
@@ -269,7 +354,10 @@ def main() -> None:
         instructions, answers = load_original_examples(args.data_file, limit=args.limit)
         _print_progress(f"Saving {len(instructions)} original examples to {args.output}.")
         save_training_examples(args.output, instructions, answers, [])
-        summary = {"mode": args.mode, "output_path": str(args.output), "num_instructions": len(instructions), "num_answers": len(answers)}
+        split_summary = split_and_save_training_examples(
+            instructions, answers, [], args.train_output, args.test_output, args.test_ratio, args.split_seed
+        )
+        summary = {"mode": args.mode, "output_path": str(args.output), "num_instructions": len(instructions), "num_answers": len(answers), **split_summary}
     else:
         summary = preprocess_kg_rag_dataset(
             args.data_file,
@@ -277,6 +365,10 @@ def main() -> None:
             limit=args.limit,
             kg_depth=args.kg_depth,
             progress_interval=args.progress_interval,
+            train_output_path=args.train_output,
+            test_output_path=args.test_output,
+            test_ratio=args.test_ratio,
+            split_seed=args.split_seed,
         )
         summary["mode"] = args.mode
     print(json.dumps(summary, indent=2, ensure_ascii=False))

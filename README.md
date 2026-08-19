@@ -312,25 +312,59 @@ and mismatched paired record IDs to prevent comparison over different prompts.
 
 `enriched_training_dataset.py` chains the stage-2 log parser and stage-3 KG-RAG builder before training. It reads the original `examples_16_june.json` examples, parses each instruction into structured incident JSON, retrieves KG-RAG security context, validates the incident/KG links, and saves a local training file that keeps the same `instructions`/`answers` shape expected by `fine_tune_llm.py`.
 
-Preprocess first and save the local KG-RAG training file:
+Preprocess first, deterministically split the enriched examples, and save the
+full, training, and held-out test files separately. `--test-ratio` is
+configurable between 0 and 1, and `--split-seed` makes the split reproducible:
 
 ```bash
-python enriched_training_dataset.py --data-file examples_16_june.json --output examples_16_june_kg_rag.json --kg-depth 2
+python enriched_training_dataset.py \
+  --data-file examples_16_june.json \
+  --output examples_16_june_kg_rag.json \
+  --train-output examples_16_june_kg_rag_train.json \
+  --test-output examples_16_june_kg_rag_test.json \
+  --test-ratio 0.2 \
+  --split-seed 99125 \
+  --kg-depth 2
 ```
 
 Then train from the saved file instead of enriching examples during training:
 
 ```bash
-python fine_tune_llm.py --dataset-mode kg_rag --processed-data-file examples_16_june_kg_rag.json
+python fine_tune_llm.py --dataset-mode kg_rag \
+  --processed-data-file examples_16_june_kg_rag_train.json
 ```
 
-For convenience, `fine_tune_llm.py` also has `--preprocess-kg-rag-data`, which performs the same explicit preprocessing step, writes `--processed-data-file`, and only then loads that local file for model training. Use `--dataset-mode original` to keep the previous behavior and train from the original `examples_16_june.json` data.
+For convenience, `fine_tune_llm.py` also has `--preprocess-kg-rag-data`, which
+first writes the full preprocessed file, `--processed-data-file` training split,
+and `--test-data-file` held-out split. It then loads only the saved training
+split. Configure the split with `--test-ratio` and `--split-seed`. No test
+examples are processed inline during model training.
+
+### Generate predictions on the held-out test set
+
+`model_test_generation.py` loads the separately saved test split, invokes a
+base or locally saved fine-tuned model for every instruction, and writes JSONL
+records containing the prompt, expected answer, raw generation, matching KG
+context, and post-processing report. Safety post-processing is enabled by
+default:
+
+```bash
+python model_test_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --test-data-file examples_16_june_kg_rag_test.json \
+  --output kg_rag_test_predictions.jsonl
+```
+
+Use `--no-post-processing` when raw predictions are required. The raw
+`generation` is always retained, so prediction files can be consumed directly
+by `response_evaluation.py` and `response_model_comparison.py` regardless of
+whether post-processing was enabled.
 
 After training, the LoRA adapter, tokenizer, and `training_metadata.json` are saved locally by default in `fine_tuned_models/deepseek-r1-distill-qwen-14b-lora`. Set `--model-output-dir` to select another local destination:
 
 ```bash
 python fine_tune_llm.py --dataset-mode kg_rag \
-  --processed-data-file examples_16_june_kg_rag.json \
+  --processed-data-file examples_16_june_kg_rag_train.json \
   --model-output-dir ./models/csle-kg-rag-lora
 ```
 

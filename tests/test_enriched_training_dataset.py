@@ -9,6 +9,8 @@ from enriched_training_dataset import (
     load_preprocessed_kg_rag_examples,
     load_training_examples,
     preprocess_kg_rag_dataset,
+    split_and_save_training_examples,
+    split_training_examples,
 )
 
 
@@ -70,3 +72,47 @@ def test_preprocess_prints_progress(tmp_path, capsys):
     assert "Loading source examples" in captured.out
     assert "Enriched 1/1 examples" in captured.out
     assert "Preprocessing finished successfully" in captured.out
+
+
+def test_split_training_examples_is_reproducible_and_aligned():
+    instructions = [f"instruction-{index}" for index in range(10)]
+    answers = [f"answer-{index}" for index in range(10)]
+    metadata = [{"source_index": index} for index in range(10)]
+
+    first_train, first_test = split_training_examples(instructions, answers, metadata, test_ratio=0.3, seed=7)
+    second_train, second_test = split_training_examples(instructions, answers, metadata, test_ratio=0.3, seed=7)
+
+    assert (first_train, first_test) == (second_train, second_test)
+    assert len(first_train[0]) == 7
+    assert len(first_test[0]) == 3
+    for subset in (first_train, first_test):
+        for instruction, answer, item_metadata in zip(*subset):
+            index = item_metadata["source_index"]
+            assert instruction == f"instruction-{index}"
+            assert answer == f"answer-{index}"
+
+
+def test_split_and_save_writes_separate_local_files(tmp_path):
+    train_path = tmp_path / "train.json"
+    test_path = tmp_path / "test.json"
+
+    summary = split_and_save_training_examples(
+        ["i0", "i1", "i2", "i3"],
+        ["a0", "a1", "a2", "a3"],
+        [{"source_index": index} for index in range(4)],
+        train_path,
+        test_path,
+        test_ratio=0.25,
+        seed=3,
+    )
+
+    train = load_preprocessed_kg_rag_examples(str(train_path))
+    test = load_preprocessed_kg_rag_examples(str(test_path))
+    assert summary["train_examples"] == len(train[0]) == 3
+    assert summary["test_examples"] == len(test[0]) == 1
+
+
+@pytest.mark.parametrize("ratio", [0.0, 1.0, -0.1, 1.1])
+def test_split_rejects_invalid_ratio(ratio):
+    with pytest.raises(ValueError, match="test_ratio"):
+        split_training_examples(["i0", "i1"], ["a0", "a1"], [], test_ratio=ratio)
