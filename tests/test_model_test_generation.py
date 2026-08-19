@@ -59,3 +59,36 @@ def test_cli_defaults_to_post_processing(monkeypatch):
         "sys.argv", ["model_test_generation.py", "--model-name-or-path", "model", "--no-post-processing"]
     )
     assert parse_args().enable_post_processing is False
+
+
+def test_prediction_generation_prints_configurable_progress(capsys):
+    build_prediction_records(
+        ["p0", "p1", "p2"],
+        ["a0", "a1", "a2"],
+        [{"source_index": index} for index in range(3)],
+        generation_fn=lambda instruction: f"result-{instruction}",
+        model_name_or_path="test-model",
+        enable_post_processing=False,
+        progress_interval=2,
+    )
+
+    output = capsys.readouterr().out
+    assert "Starting test generation for 3 examples" in output
+    assert "Generating prediction 1/3; source_index=0" in output
+    assert "Generating prediction 2/3; source_index=1" in output
+    assert "Generating prediction 3/3; source_index=2" in output
+    assert "post-processing=not-run" in output
+    assert "Completed test generation for 3 examples" in output
+
+
+def test_prediction_progress_can_be_disabled(capsys):
+    build_prediction_records(
+        ["prompt"],
+        ["answer"],
+        [],
+        generation_fn=lambda _: "result",
+        model_name_or_path="test-model",
+        show_progress=False,
+    )
+
+    assert capsys.readouterr().out == ""

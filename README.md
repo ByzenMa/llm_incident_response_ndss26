@@ -359,13 +359,17 @@ default:
 python model_test_generation.py \
   --model-name-or-path ./models/csle-kg-rag-lora \
   --test-data-file examples_16_june_kg_rag_test.json \
-  --output kg_rag_test_predictions.jsonl
+  --output kg_rag_test_predictions.jsonl \
+  --progress-interval 1
 ```
 
 Use `--no-post-processing` when raw predictions are required. The raw
 `generation` is always retained, so prediction files can be consumed directly
 by `response_evaluation.py` and `response_model_comparison.py` regardless of
-whether post-processing was enabled.
+whether post-processing was enabled. Test progress is printed by default before
+and after configured examples, including the current/total count,
+`source_index`, and post-processing status. Set `--progress-interval N` to print
+every N examples, or use `--no-progress` to suppress progress output.
 
 After training, the LoRA adapter, tokenizer, and `training_metadata.json` are saved locally by default in `fine_tuned_models/deepseek-r1-distill-qwen-14b-lora`. Set `--model-output-dir` to select another local destination:
 

@@ -15,6 +15,11 @@ from response_post_processor import GenerationPostProcessor
 DEFAULT_PREDICTIONS_FILE = Path("model_test_predictions.jsonl")
 
 
+def _print_progress(message: str, enabled: bool = True) -> None:
+    if enabled:
+        print(f"[model_test_generation] {message}", flush=True)
+
+
 def build_prediction_records(
     instructions: Sequence[str],
     answers: Sequence[str],
@@ -23,6 +28,8 @@ def build_prediction_records(
     model_name_or_path: str,
     enable_post_processing: bool = True,
     processor: Optional[GenerationPostProcessor] = None,
+    show_progress: bool = True,
+    progress_interval: int = 1,
 ) -> List[Dict[str, Any]]:
     """Generate predictions and optionally apply the default safety gate."""
     if len(instructions) != len(answers):
@@ -31,8 +38,21 @@ def build_prediction_records(
         raise ValueError("Test metadata must align with instructions.")
     safety_processor = processor or GenerationPostProcessor()
     records: List[Dict[str, Any]] = []
+    total = len(instructions)
+    interval = max(1, progress_interval)
+    post_processing_mode = "enabled" if enable_post_processing else "disabled"
+    _print_progress(
+        f"Starting test generation for {total} examples with model={model_name_or_path}; "
+        f"post-processing={post_processing_mode}.",
+        show_progress,
+    )
     for index, (instruction, expected_answer) in enumerate(zip(instructions, answers)):
         item_metadata = metadata[index] if metadata else {}
+        source_id = str(item_metadata.get("source_index", index))
+        completed = index + 1
+        should_report = completed == 1 or completed == total or completed % interval == 0
+        if should_report:
+            _print_progress(f"Generating prediction {completed}/{total}; source_index={source_id}.", show_progress)
         kg_context = item_metadata.get("kg_rag")
         generation = generation_fn(instruction)
         post_processing = None
@@ -40,7 +60,7 @@ def build_prediction_records(
             post_processing = asdict(safety_processor.process(generation, kg_context=kg_context))
         records.append(
             {
-                "id": str(item_metadata.get("source_index", index)),
+                "id": source_id,
                 "model_name_or_path": model_name_or_path,
                 "instruction": instruction,
                 "expected_answer": expected_answer,
@@ -50,6 +70,16 @@ def build_prediction_records(
                 "post_processing": post_processing,
             }
         )
+        if should_report:
+            status = "not-run"
+            if post_processing is not None:
+                status = "accepted" if post_processing["accepted"] else "blocked"
+            _print_progress(
+                f"Completed prediction {completed}/{total}; source_index={source_id}; "
+                f"post-processing={status}.",
+                show_progress,
+            )
+    _print_progress(f"Completed test generation for {total} examples.", show_progress)
     return records
 
 
@@ -92,6 +122,8 @@ def parse_args():
     parser.add_argument("--max-new-tokens", type=int, default=6000)
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--do-sample", action="store_true", default=False)
+    parser.add_argument("--progress-interval", type=int, default=1, help="Print progress every N test examples.")
+    parser.add_argument("--no-progress", dest="show_progress", action="store_false", default=True)
     return parser.parse_args()
 
 
@@ -102,9 +134,11 @@ def main() -> None:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
+    _print_progress(f"Loading model and tokenizer from {args.model_name_or_path} on {device}.", args.show_progress)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, dtype=dtype, device_map="auto")
     model.eval()
+    _print_progress(f"Loading held-out test data from {args.test_data_file}.", args.show_progress)
     instructions, answers, metadata = load_examples_from_local_json(args.test_data_file)
     processor = GenerationPostProcessor(
         allowed_cves=args.allowed_cve,
@@ -118,7 +152,10 @@ def main() -> None:
         model_name_or_path=args.model_name_or_path,
         enable_post_processing=args.enable_post_processing,
         processor=processor,
+        show_progress=args.show_progress,
+        progress_interval=args.progress_interval,
     )
+    _print_progress(f"Saving {len(records)} predictions to {args.output}.", args.show_progress)
     save_prediction_records(args.output, records)
     print(f"Saved {len(records)} test predictions to {args.output}.")
 
