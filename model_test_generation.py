@@ -15,6 +15,13 @@ from response_post_processor import GenerationPostProcessor
 DEFAULT_PREDICTIONS_FILE = Path("model_test_predictions.jsonl")
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
+
+
 def _print_progress(message: str, enabled: bool = True) -> None:
     if enabled:
         print(f"[model_test_generation] {message}", flush=True)
@@ -42,8 +49,8 @@ def build_prediction_records(
     interval = max(1, progress_interval)
     post_processing_mode = "enabled" if enable_post_processing else "disabled"
     _print_progress(
-        f"Starting test generation for {total} examples with model={model_name_or_path}; "
-        f"post-processing={post_processing_mode}.",
+        f"Starting test generation for {total} examples sequentially with "
+        f"model={model_name_or_path}; post-processing={post_processing_mode}.",
         show_progress,
     )
     for index, (instruction, expected_answer) in enumerate(zip(instructions, answers)):
@@ -89,7 +96,15 @@ def save_prediction_records(path: Path, records: Sequence[Dict[str, Any]]) -> No
     path.write_text("".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records), encoding="utf-8")
 
 
-def _model_generation_function(model: Any, tokenizer: Any, device: str, max_new_tokens: int, temperature: float, do_sample: bool):
+def _model_generation_function(
+    model: Any,
+    tokenizer: Any,
+    device: str,
+    max_new_tokens: int,
+    temperature: float,
+    do_sample: bool,
+):
+    """Create a generation function that performs one model call per prompt."""
     def generate(instruction: str) -> str:
         inputs = tokenizer(instruction, return_tensors="pt")
         inputs = {key: value.to(device) for key, value in inputs.items()}
@@ -122,7 +137,7 @@ def parse_args():
     parser.add_argument("--max-new-tokens", type=int, default=6000)
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--do-sample", action="store_true", default=False)
-    parser.add_argument("--progress-interval", type=int, default=1, help="Print progress every N test examples.")
+    parser.add_argument("--progress-interval", type=_positive_int, default=1, help="Print progress every N test examples.")
     parser.add_argument("--no-progress", dest="show_progress", action="store_false", default=True)
     return parser.parse_args()
 
@@ -148,7 +163,9 @@ def main() -> None:
         instructions,
         answers,
         metadata,
-        _model_generation_function(model, tokenizer, device, args.max_new_tokens, args.temperature, args.do_sample),
+        _model_generation_function(
+            model, tokenizer, device, args.max_new_tokens, args.temperature, args.do_sample
+        ),
         model_name_or_path=args.model_name_or_path,
         enable_post_processing=args.enable_post_processing,
         processor=processor,

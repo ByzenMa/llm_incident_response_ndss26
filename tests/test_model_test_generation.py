@@ -53,7 +53,8 @@ def test_prediction_records_are_saved_as_jsonl(tmp_path):
 
 def test_cli_defaults_to_post_processing(monkeypatch):
     monkeypatch.setattr("sys.argv", ["model_test_generation.py", "--model-name-or-path", "model"])
-    assert parse_args().enable_post_processing is True
+    args = parse_args()
+    assert args.enable_post_processing is True
 
     monkeypatch.setattr(
         "sys.argv", ["model_test_generation.py", "--model-name-or-path", "model", "--no-post-processing"]
@@ -77,6 +78,9 @@ def test_prediction_generation_prints_configurable_progress(capsys):
     assert "Generating prediction 1/3; source_index=0" in output
     assert "Generating prediction 2/3; source_index=1" in output
     assert "Generating prediction 3/3; source_index=2" in output
+    assert "Completed prediction 1/3; source_index=0" in output
+    assert "Completed prediction 2/3; source_index=1" in output
+    assert "Completed prediction 3/3; source_index=2" in output
     assert "post-processing=not-run" in output
     assert "Completed test generation for 3 examples" in output
 
@@ -92,3 +96,24 @@ def test_prediction_progress_can_be_disabled(capsys):
     )
 
     assert capsys.readouterr().out == ""
+
+
+def test_prediction_generation_calls_model_once_per_record():
+    calls = []
+
+    def generate(instruction):
+        calls.append(instruction)
+        return f"result-{instruction}"
+
+    records = build_prediction_records(
+        ["p0", "p1", "p2", "p3", "p4"],
+        ["a0", "a1", "a2", "a3", "a4"],
+        [],
+        generation_fn=generate,
+        model_name_or_path="test-model",
+        enable_post_processing=False,
+        show_progress=False,
+    )
+
+    assert calls == ["p0", "p1", "p2", "p3", "p4"]
+    assert [record["generation"] for record in records] == [f"result-p{index}" for index in range(5)]

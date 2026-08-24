@@ -251,44 +251,61 @@ python response_generation.py \
 
 The report contains accepted actions, blocked actions, all findings, and a summary. Treat `error` findings as blocking issues that require human review or regeneration, and treat `warning` findings as verification tasks before execution.
 
-### Response quality and safety evaluation
+### Two-stage response evaluation
 
-`response_evaluation.py` evaluates saved model generations with the same rules
-as the generation post-processing gate. It reports three aggregate metrics and
-retains per-action findings for audit and error analysis:
+`response_evaluation.py` evaluates saved predictions in two separate stages.
+Every JSON/JSONL record must contain a generated result in `generation` (or
+`generated_response`, `response`, or `actions`) and its label in
+`expected_answer` (or `label`, `reference`, or `answer`).
 
-- **Hallucinated action rate** = actions containing a malformed, implausible,
-  or KG-untrusted CVE, or an ATT&CK technique not linked to the incident KG,
-  divided by all generated actions. Missing path references are reported by the
-  safety gate but are not counted as fabricated claims.
-- **Incorrect command rate** = commands that cannot be parsed or whose
-  executable is outside the incident-response allow-list, divided by all
-  generated commands. Actions without commands do not affect this denominator.
-- **Unsafe action rate** = actions with a blocking policy violation, such as a
-  prohibited destructive command or a destructive/recovery action without a
-  rollback plan, divided by all generated actions.
+**Stage 1 — generated result versus label** reports:
 
-Create a JSON array or JSONL file in which every record contains `generation`
-(or `generated_response`, `response`, or `actions`) and may contain the matching
-`kg_context`/`security_context`. Then run:
+- **Response action accuracy**: multiset overlap between normalized generated
+  and labelled action types, divided by the larger action count.
+- **Evidence accuracy**: token-level F1 overlap between evidence extracted from
+  the generated response and labelled answer.
+- **Mean semantic similarity**: average cosine similarity between generated and
+  labelled text. The dependency-free token cosine scorer is used by default.
+  Set `--semantic-model` to a local or Hugging Face SentenceTransformer model
+  to calculate semantic similarity with language-model embeddings.
+
+**Stage 2 — operational safety statistics** reports incorrect command rate,
+unsafe action rate, and incomplete action rate. An incomplete action has an
+unknown action type, no target, no supporting evidence, or a required rollback
+plan that is missing.
 
 ```bash
 python response_evaluation.py \
   --input generated_responses.jsonl \
+  --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
   --output evaluation_report.json
 ```
 
-The report includes each metric's numerator, denominator, and rate. Keep each
-generation paired with the KG context retrieved for that incident so that CVE
-and attack-path support are evaluated against the context actually presented to
-the model.
+Omit `--semantic-model` to run entirely without an embedding-model dependency.
+The report retains per-record similarity scores and per-action safety findings
+for audit and error analysis.
 
 #### Comparing the base and KG-RAG-fine-tuned models
 
-Generate responses from both models for the same ordered evaluation prompts,
-and save them as `base_generations.jsonl` and `kg_rag_generations.jsonl`. Every
-corresponding record should use the same `id` (or `record_id`, `incident_id`, or
-`prompt_id`) and the same retrieved KG context. Then compare the three metrics:
+Generate responses for the same ordered and labelled test examples. The base
+model must run with `--no-post-processing`; the KG-RAG-fine-tuned model keeps
+post-processing enabled so its prediction file contains recorded findings:
+
+```bash
+python model_test_generation.py \
+  --model-name-or-path ./models/base \
+  --test-data-file examples_16_june_original_test.json \
+  --no-post-processing \
+  --output base_generations.jsonl
+
+python model_test_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --test-data-file examples_16_june_kg_rag_test.json \
+  --output kg_rag_generations.jsonl
+```
+
+Every corresponding record must have the same ID and `expected_answer`. Then
+run both evaluation stages:
 
 ```bash
 python response_model_comparison.py \
@@ -296,16 +313,18 @@ python response_model_comparison.py \
   --candidate-input kg_rag_generations.jsonl \
   --baseline-name deepseek-base \
   --candidate-name csle-kg-rag-lora \
+  --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
   --output model_comparison_report.json
 ```
 
-For every metric, the report contains the base and fine-tuned rates,
-`absolute_change` (fine-tuned minus base), `absolute_improvement` (base minus
-fine-tuned), and `relative_reduction` (`absolute_improvement / base`). Because
-all three metrics are error rates, a positive improvement or relative reduction
-indicates that the KG-RAG-fine-tuned model performed better. Relative reduction
-is `null` when the base rate is zero. The command rejects unequal record counts
-and mismatched paired record IDs to prevent comparison over different prompts.
+Stage 1 compares both models' action accuracy, evidence accuracy, and mean
+semantic similarity; positive `absolute_improvement` means the fine-tuned model
+is closer to the labels. Stage 2 records the incorrect-command and unsafe-action
+rates that the base model would ignore without post-processing, and the
+incorrect-command and incomplete-action rates recorded for the post-processed
+KG-RAG model. The comparison rejects unequal record counts, mismatched IDs or
+labels, a post-processed base file, and a candidate file without recorded
+post-processing results.
 
 
 ### Preprocessing `examples_16_june.json` for KG-RAG fine-tuning
@@ -369,7 +388,10 @@ by `response_evaluation.py` and `response_model_comparison.py` regardless of
 whether post-processing was enabled. Test progress is printed by default before
 and after configured examples, including the current/total count,
 `source_index`, and post-processing status. Set `--progress-interval N` to print
-every N examples, or use `--no-progress` to suppress progress output.
+every N examples, or use `--no-progress` to suppress progress output. Test
+instructions are generated strictly one at a time: each record is tokenized,
+passed to one `model.generate()` call, post-processed, and stored before the
+next record is generated.
 
 After training, the LoRA adapter, tokenizer, and `training_metadata.json` are saved locally by default in `fine_tuned_models/deepseek-r1-distill-qwen-14b-lora`. Set `--model-output-dir` to select another local destination:
 

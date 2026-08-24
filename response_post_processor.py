@@ -186,6 +186,7 @@ class GenerationPostProcessor:
         findings.extend(self._validate_cves(text, kg_context))
         findings.extend(self._validate_commands(action.command))
         findings.extend(self._validate_policy(action))
+        findings.extend(self._validate_completeness(action))
         findings.extend(self._validate_attack_path(text, kg_context))
         return findings
 
@@ -232,6 +233,18 @@ class GenerationPostProcessor:
             findings.append(ValidationFinding("policy_constraint", "error", "Destructive or recovery actions must include an explicit rollback/backout plan."))
         if action.action_type in _DESTRUCTIVE_ACTION_TYPES and not action.evidence:
             findings.append(ValidationFinding("policy_constraint", "warning", "Destructive or recovery actions should cite evidence before execution."))
+        return findings
+
+    def _validate_completeness(self, action: ParsedAction) -> List[ValidationFinding]:
+        findings: List[ValidationFinding] = []
+        if action.action_type == "other":
+            findings.append(ValidationFinding("action_completeness", "warning", "Action type could not be determined."))
+        if not action.target:
+            findings.append(ValidationFinding("action_completeness", "warning", "Action does not identify a target."))
+        if not action.evidence:
+            findings.append(ValidationFinding("action_completeness", "warning", "Action does not cite supporting evidence."))
+        if action.action_type in _DESTRUCTIVE_ACTION_TYPES and not action.rollback:
+            findings.append(ValidationFinding("action_completeness", "warning", "Action does not include the required rollback plan."))
         return findings
 
     def _validate_attack_path(self, text: str, kg_context: Optional[Dict[str, Any]]) -> List[ValidationFinding]:

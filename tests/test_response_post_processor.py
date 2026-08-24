@@ -48,3 +48,11 @@ def test_post_processor_flags_malformed_and_out_of_context_cves():
     cve_findings = [finding for finding in result.findings if finding["category"] == "cve_authenticity"]
     assert any(finding["severity"] == "error" for finding in cve_findings)
     assert any("Malformed CVE" in finding["message"] for finding in cve_findings)
+
+
+def test_post_processor_records_incomplete_actions():
+    result = GenerationPostProcessor().process({"action_type": "investigation", "command": "tcpdump -i eth0"})
+
+    completeness = [finding for finding in result.findings if finding["category"] == "action_completeness"]
+    assert any("target" in finding["message"] for finding in completeness)
+    assert any("evidence" in finding["message"] for finding in completeness)
