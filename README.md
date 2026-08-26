@@ -362,12 +362,13 @@ scorer. Use `--progress-interval N` or `--no-progress` to control stage-1
 similarity progress output.
 
 To run a controlled permutation experiment, set `--swap-percentage` from 0 to
-100 and provide two new output paths. The script deterministically selects the
-requested percentage of paired indexes using `--swap-seed`, exchanges only the
-`generation` values, and leaves IDs, labels, prompts, KG context, metadata, and
-all other fields unchanged. It never overwrites either source output file. The
-comparison report is calculated from the newly swapped copies and records the
-selected indexes:
+100 and provide two new output paths. The script first evaluates every original
+pair with the action-first rules above, then uses `--swap-seed` to randomly
+select the requested percentage **only from `base_better_indices`**. It exchanges
+the selected `generation` values and leaves IDs, labels, prompts, KG context,
+metadata, and all other fields unchanged. It never overwrites either source
+output file. The comparison report describes the original pre-swap scores and
+records `swap_eligible_count`, `swapped_count`, and the selected indexes:
 
 ```bash
 python response_generation_comparison.py \

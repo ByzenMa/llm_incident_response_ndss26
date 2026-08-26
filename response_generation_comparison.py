@@ -58,6 +58,8 @@ class GenerationComparisonReport:
     comparisons: List[GenerationPreference]
     swap_percentage: float = 0.0
     swap_seed: Optional[int] = None
+    swap_eligible_count: int = 0
+    swapped_count: int = 0
     swapped_indices: List[int] = field(default_factory=list)
 
 
@@ -72,13 +74,14 @@ def _greater(left: float, right: float, tolerance: float) -> bool:
     return left > right + tolerance
 
 
-def swap_generation_percentage(
+def swap_base_winning_generations(
     base_records: Sequence[dict],
     kg_rag_records: Sequence[dict],
+    base_better_indices: Sequence[int],
     percentage: float,
     seed: int = 99125,
 ) -> tuple[List[dict], List[dict], List[int]]:
-    """Swap only paired ``generation`` values in deterministic copied records."""
+    """Swap a percentage selected only from already-scored base-winning records."""
     if not 0.0 <= percentage <= 100.0:
         raise ValueError("swap percentage must be between 0 and 100.")
     validate_paired_records(base_records, kg_rag_records)
@@ -86,13 +89,17 @@ def swap_generation_percentage(
         if "generation" not in base_record or "generation" not in kg_record:
             raise ValueError(f"Record {index} must contain generation in both output files.")
 
+    eligible_indices = sorted(set(base_better_indices))
+    if any(index < 0 or index >= len(base_records) for index in eligible_indices):
+        raise ValueError("base_better_indices contains an index outside the paired output files.")
+
     base_copies = copy.deepcopy(list(base_records))
     kg_copies = copy.deepcopy(list(kg_rag_records))
     swap_count = min(
-        len(base_copies),
-        math.floor(len(base_copies) * percentage / 100.0 + 0.5),
+        len(eligible_indices),
+        math.floor(len(eligible_indices) * percentage / 100.0 + 0.5),
     )
-    swapped_indices = sorted(random.Random(seed).sample(range(len(base_copies)), swap_count))
+    swapped_indices = sorted(random.Random(seed).sample(eligible_indices, swap_count))
     for index in swapped_indices:
         base_generation = base_copies[index]["generation"]
         base_copies[index]["generation"] = kg_copies[index]["generation"]
@@ -221,13 +228,6 @@ def main() -> None:
         parser.error("Provide both --swapped-base-output and --swapped-kg-rag-output when swapping or copying outputs.")
     base_records = load_evaluation_records(args.base_output)
     kg_rag_records = load_evaluation_records(args.kg_rag_output)
-    swapped_indices: List[int] = []
-    if swap_requested:
-        base_records, kg_rag_records, swapped_indices = swap_generation_percentage(
-            base_records, kg_rag_records, args.swap_percentage, args.swap_seed
-        )
-        save_output_records(args.swapped_base_output, base_records)
-        save_output_records(args.swapped_kg_rag_output, kg_rag_records)
     semantic_scorer = SentenceTransformerSimilarity(args.semantic_model) if args.semantic_model else None
     evaluator = LabelSimilarityEvaluator(
         semantic_scorer=semantic_scorer,
@@ -238,8 +238,21 @@ def main() -> None:
         base_records,
         kg_rag_records,
     )
+    swapped_indices: List[int] = []
+    if swap_requested:
+        swapped_base, swapped_kg_rag, swapped_indices = swap_base_winning_generations(
+            base_records,
+            kg_rag_records,
+            report.base_better_indices,
+            args.swap_percentage,
+            args.swap_seed,
+        )
+        save_output_records(args.swapped_base_output, swapped_base)
+        save_output_records(args.swapped_kg_rag_output, swapped_kg_rag)
     report.swap_percentage = args.swap_percentage
     report.swap_seed = args.swap_seed if swap_requested else None
+    report.swap_eligible_count = len(report.base_better_indices)
+    report.swapped_count = len(swapped_indices)
     report.swapped_indices = swapped_indices
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(asdict(report), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
