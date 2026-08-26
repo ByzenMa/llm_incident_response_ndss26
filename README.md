@@ -361,6 +361,25 @@ scores/reasons. Omit `--semantic-model` to use the dependency-free token cosine
 scorer. Use `--progress-interval N` or `--no-progress` to control stage-1
 similarity progress output.
 
+To run a controlled permutation experiment, set `--swap-percentage` from 0 to
+100 and provide two new output paths. The script deterministically selects the
+requested percentage of paired indexes using `--swap-seed`, exchanges only the
+`generation` values, and leaves IDs, labels, prompts, KG context, metadata, and
+all other fields unchanged. It never overwrites either source output file. The
+comparison report is calculated from the newly swapped copies and records the
+selected indexes:
+
+```bash
+python response_generation_comparison.py \
+  --base-output base_generations.jsonl \
+  --kg-rag-output kg_rag_generations.jsonl \
+  --swap-percentage 20 \
+  --swap-seed 99125 \
+  --swapped-base-output base_generations_swapped.jsonl \
+  --swapped-kg-rag-output kg_rag_generations_swapped.jsonl \
+  --output generation_comparison_swapped.json
+```
+
 
 ### Preprocessing `examples_16_june.json` for KG-RAG fine-tuning
 
