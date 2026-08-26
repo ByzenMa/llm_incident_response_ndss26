@@ -332,6 +332,35 @@ KG-RAG model. The comparison rejects unequal record counts, mismatched IDs or
 labels, a post-processed base file, and a candidate file without recorded
 post-processing results.
 
+#### Analyze which model generated the better response at each index
+
+`response_generation_comparison.py` compares paired base and KG-RAG prediction
+output files record by record and reports the indexes where the base model,
+KG-RAG fine-tuned model, or neither model generated the better text. Both files
+must contain the same IDs and labels. Ranking is lexicographic so action
+accuracy has higher weight than semantic similarity:
+
+1. A model wins with reason `both_action_accuracy_and_semantic_similarity_higher`
+   when both scores are higher.
+2. Otherwise, a higher action accuracy wins even if its semantic similarity is
+   lower.
+3. Semantic similarity decides only when action accuracy is equal within
+   `--tolerance`.
+
+```bash
+python response_generation_comparison.py \
+  --base-output base_generations.jsonl \
+  --kg-rag-output kg_rag_generations.jsonl \
+  --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
+  --output generation_comparison.json
+```
+
+The JSON report contains `base_better_indices`, `kg_rag_better_indices`, and
+`tie_indices`, corresponding record IDs, aggregate counts, and per-record
+scores/reasons. Omit `--semantic-model` to use the dependency-free token cosine
+scorer. Use `--progress-interval N` or `--no-progress` to control stage-1
+similarity progress output.
+
 
 ### Preprocessing `examples_16_june.json` for KG-RAG fine-tuning
 
