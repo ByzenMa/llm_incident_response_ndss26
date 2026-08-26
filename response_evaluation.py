@@ -18,6 +18,18 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 from response_post_processor import GenerationPostProcessor
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
+
+
+def _print_stage_one_progress(message: str, enabled: bool = True) -> None:
+    if enabled:
+        print(f"[response_evaluation:stage_one] {message}", flush=True)
+
+
 @dataclass
 class MetricResult:
     numerator: int
@@ -158,13 +170,41 @@ class LabelSimilarityEvaluator:
         self,
         processor: Optional[GenerationPostProcessor] = None,
         semantic_scorer: Optional[Callable[[str, str], float]] = None,
+        show_progress: bool = True,
+        progress_interval: int = 1,
     ) -> None:
         self.processor = processor or GenerationPostProcessor()
         self.semantic_scorer = semantic_scorer or lexical_semantic_similarity
+        self.show_progress = show_progress
+        self.progress_interval = max(1, progress_interval)
 
-    def evaluate(self, records: Iterable[Dict[str, Any]]) -> SimilarityEvaluationReport:
+    def evaluate(
+        self,
+        records: Iterable[Dict[str, Any]],
+        progress_label: str = "predictions",
+    ) -> SimilarityEvaluationReport:
+        records = list(records)
         details: List[SimilarityRecordEvaluation] = []
+        total = len(records)
+        _print_stage_one_progress(
+            f"Starting label and semantic similarity evaluation for {progress_label}: {total} records.",
+            self.show_progress,
+        )
         for record_index, record in enumerate(records):
+            completed = record_index + 1
+            should_report = (
+                completed == 1
+                or completed == total
+                or completed % self.progress_interval == 0
+            )
+            record_id = str(
+                record.get("id", record.get("record_id", record.get("source_index", record_index)))
+            )
+            if should_report:
+                _print_stage_one_progress(
+                    f"Scoring record {completed}/{total}; set={progress_label}; id={record_id}.",
+                    self.show_progress,
+                )
             generation = _record_generation(record)
             label = _record_label(record)
             predicted_actions = self.processor.parse_actions(generation)
@@ -183,6 +223,17 @@ class LabelSimilarityEvaluator:
                     record_index, action_accuracy, evidence_accuracy, semantic_similarity
                 )
             )
+            if should_report:
+                _print_stage_one_progress(
+                    f"Completed record {completed}/{total}; set={progress_label}; id={record_id}; "
+                    f"action_accuracy={action_accuracy:.4f}; evidence_accuracy={evidence_accuracy:.4f}; "
+                    f"semantic_similarity={semantic_similarity:.4f}.",
+                    self.show_progress,
+                )
+        _print_stage_one_progress(
+            f"Completed label and semantic similarity evaluation for {progress_label}: {total} records.",
+            self.show_progress,
+        )
         return SimilarityEvaluationReport(
             record_count=len(details),
             response_action_accuracy=_average([item.action_accuracy for item in details]),
@@ -329,11 +380,17 @@ def main() -> None:
         "--semantic-model",
         help="Optional local/HF SentenceTransformer model for language-model embedding similarity.",
     )
+    parser.add_argument("--progress-interval", type=_positive_int, default=1, help="Print stage-1 progress every N records.")
+    parser.add_argument("--no-progress", dest="show_progress", action="store_false", default=True)
     args = parser.parse_args()
     records = load_evaluation_records(args.input)
     semantic_scorer = SentenceTransformerSimilarity(args.semantic_model) if args.semantic_model else None
     report = TwoStageEvaluationReport(
-        LabelSimilarityEvaluator(semantic_scorer=semantic_scorer).evaluate(records),
+        LabelSimilarityEvaluator(
+            semantic_scorer=semantic_scorer,
+            show_progress=args.show_progress,
+            progress_interval=args.progress_interval,
+        ).evaluate(records),
         ResponseEvaluator().evaluate(records),
     )
     report_json = json.dumps(asdict(report), indent=2, ensure_ascii=False)

@@ -102,3 +102,29 @@ def test_load_evaluation_records_supports_jsonl(tmp_path):
     )
 
     assert len(load_evaluation_records(path)) == 2
+
+
+def test_stage_one_prints_semantic_similarity_progress(capsys):
+    records = [
+        {"id": "r0", "generation": "Inspect logs.", "expected_answer": "Inspect logs."},
+        {"id": "r1", "generation": "Contain host.", "expected_answer": "Contain host."},
+        {"id": "r2", "generation": "Monitor alerts.", "expected_answer": "Monitor alerts."},
+    ]
+
+    LabelSimilarityEvaluator(progress_interval=2).evaluate(records, progress_label="base:test-model")
+
+    output = capsys.readouterr().out
+    assert "Starting label and semantic similarity evaluation for base:test-model: 3 records" in output
+    assert "Scoring record 1/3; set=base:test-model; id=r0" in output
+    assert "Scoring record 2/3; set=base:test-model; id=r1" in output
+    assert "Scoring record 3/3; set=base:test-model; id=r2" in output
+    assert "semantic_similarity=1.0000" in output
+    assert "Completed label and semantic similarity evaluation for base:test-model" in output
+
+
+def test_stage_one_progress_can_be_disabled(capsys):
+    LabelSimilarityEvaluator(show_progress=False).evaluate(
+        [{"generation": "Inspect logs.", "expected_answer": "Inspect logs."}]
+    )
+
+    assert capsys.readouterr().out == ""

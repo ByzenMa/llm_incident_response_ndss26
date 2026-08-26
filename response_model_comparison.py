@@ -19,6 +19,13 @@ from response_evaluation import (
 )
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
+
+
 @dataclass
 class SimilarityMetricComparison:
     baseline_score: float
@@ -123,8 +130,12 @@ class ModelResponseComparator:
     ) -> ModelComparisonReport:
         validate_paired_records(baseline_records, candidate_records)
         validate_post_processing_modes(baseline_records, candidate_records)
-        baseline_similarity = self.similarity_evaluator.evaluate(baseline_records)
-        candidate_similarity = self.similarity_evaluator.evaluate(candidate_records)
+        baseline_similarity = self.similarity_evaluator.evaluate(
+            baseline_records, progress_label=f"baseline:{baseline_name}"
+        )
+        candidate_similarity = self.similarity_evaluator.evaluate(
+            candidate_records, progress_label=f"candidate:{candidate_name}"
+        )
         baseline_safety = self.safety_evaluator.evaluate(baseline_records)
         candidate_safety = self.safety_evaluator.evaluate_recorded_post_processing(candidate_records)
         stage_one = StageOneComparison(
@@ -167,11 +178,17 @@ def main() -> None:
     parser.add_argument("--baseline-name", default="base")
     parser.add_argument("--candidate-name", default="kg_rag_finetuned")
     parser.add_argument("--semantic-model", help="Optional SentenceTransformer model for semantic similarity.")
+    parser.add_argument("--progress-interval", type=_positive_int, default=1, help="Print stage-1 progress every N records.")
+    parser.add_argument("--no-progress", dest="show_progress", action="store_false", default=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     semantic_scorer = SentenceTransformerSimilarity(args.semantic_model) if args.semantic_model else None
     report = ModelResponseComparator(
-        similarity_evaluator=LabelSimilarityEvaluator(semantic_scorer=semantic_scorer)
+        similarity_evaluator=LabelSimilarityEvaluator(
+            semantic_scorer=semantic_scorer,
+            show_progress=args.show_progress,
+            progress_interval=args.progress_interval,
+        )
     ).compare(
         load_evaluation_records(args.baseline_input),
         load_evaluation_records(args.candidate_input),

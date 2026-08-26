@@ -278,12 +278,17 @@ plan that is missing.
 python response_evaluation.py \
   --input generated_responses.jsonl \
   --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
+  --progress-interval 1 \
   --output evaluation_report.json
 ```
 
 Omit `--semantic-model` to run entirely without an embedding-model dependency.
 The report retains per-record similarity scores and per-action safety findings
-for audit and error analysis.
+for audit and error analysis. Stage-1 progress is printed before and after each
+configured record and includes the current/total count, record ID, action
+accuracy, evidence accuracy, and semantic similarity. Set
+`--progress-interval N` to print every N records, or use `--no-progress` to
+suppress progress output.
 
 #### Comparing the base and KG-RAG-fine-tuned models
 
@@ -314,6 +319,7 @@ python response_model_comparison.py \
   --baseline-name deepseek-base \
   --candidate-name csle-kg-rag-lora \
   --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
+  --progress-interval 1 \
   --output model_comparison_report.json
 ```
 
