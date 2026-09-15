@@ -444,9 +444,64 @@ whether post-processing was enabled. Test progress is printed by default before
 and after configured examples, including the current/total count,
 `source_index`, and post-processing status. Set `--progress-interval N` to print
 every N examples, or use `--no-progress` to suppress progress output. Test
-instructions are generated strictly one at a time: each record is tokenized,
-passed to one `model.generate()` call, post-processed, and stored before the
-next record is generated.
+instructions are generated strictly one at a time. With the default
+`--rag-mode none`, each record is tokenized, passed to one `model.generate()`
+call, post-processed, and stored before the next record is generated.
+
+### Post-generation text-RAG and KG-RAG
+
+`generation_rag.py` adds a two-pass generation flow rather than claiming that
+retrieval happened after a final answer was already fixed. For every test
+record, `model_test_generation.py` first generates a draft, uses the original
+instruction plus that draft as the retrieval query, builds a grounded revision
+prompt, and calls the model a second time. The second answer is saved as
+`generation`; the first answer remains available as `draft_generation`.
+
+- `--rag-mode text_rag` retrieves the top lexical matches from a local JSON,
+  JSONL, or text corpus. Use a training split as the corpus to avoid test-label
+  leakage.
+- `--rag-mode kg_rag` parses the instruction and draft into incident JSON and
+  retrieves CVE, asset, service, ATT&CK, mitigation, and rule context from the
+  security graph.
+- `--rag-mode none` preserves the single-pass behavior and is the default.
+
+Generate text-RAG and KG-RAG predictions for the same original held-out split:
+
+```bash
+python model_test_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --test-data-file examples_16_june_original_test.json \
+  --rag-mode text_rag \
+  --text-rag-corpus examples_16_june_original_train.json \
+  --rag-top-k 3 \
+  --output text_rag_predictions.jsonl
+
+python model_test_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --test-data-file examples_16_june_original_test.json \
+  --rag-mode kg_rag \
+  --rag-kg-depth 2 \
+  --output kg_rag_predictions.jsonl
+```
+
+Each output record includes `rag_mode`, `draft_generation`, the final revised
+`generation`, retrieval details in `rag_augmentation`, and the post-processing
+report. Compare the paired outputs with:
+
+```bash
+python rag_generation_comparison.py \
+  --text-rag-output text_rag_predictions.jsonl \
+  --kg-rag-output kg_rag_predictions.jsonl \
+  --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
+  --output text_vs_kg_rag_report.json
+```
+
+The report compares action accuracy, evidence accuracy, and mean semantic
+similarity using `kg_rag_minus_text_rag` (positive favors KG-RAG). It also
+compares recorded incorrect-command, unsafe-action, and incomplete-action rates
+using `reduction_from_text_to_kg` (positive means KG-RAG has the lower error
+rate). Record IDs and expected labels must match, and both input files must
+contain their post-processing reports.
 
 After training, the LoRA adapter, tokenizer, and `training_metadata.json` are saved locally by default in `fine_tuned_models/deepseek-r1-distill-qwen-14b-lora`. Set `--model-output-dir` to select another local destination:
 

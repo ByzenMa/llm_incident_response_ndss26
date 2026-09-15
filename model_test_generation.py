@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from enriched_training_dataset import DEFAULT_KG_RAG_TEST_FILE, load_examples_from_local_json
+from generation_rag import KG_RAG, NO_RAG, TEXT_RAG, PostGenerationRAG, TextRAGRetriever, load_text_corpus
 from response_post_processor import GenerationPostProcessor
 
 
@@ -37,12 +38,18 @@ def build_prediction_records(
     processor: Optional[GenerationPostProcessor] = None,
     show_progress: bool = True,
     progress_interval: int = 1,
+    rag_mode: str = NO_RAG,
+    rag_augmenter: Optional[PostGenerationRAG] = None,
 ) -> List[Dict[str, Any]]:
     """Generate predictions and optionally apply the default safety gate."""
     if len(instructions) != len(answers):
         raise ValueError("Test instructions and answers must have equal lengths.")
     if metadata and len(metadata) != len(instructions):
         raise ValueError("Test metadata must align with instructions.")
+    if rag_mode not in {NO_RAG, TEXT_RAG, KG_RAG}:
+        raise ValueError(f"Unsupported RAG mode: {rag_mode}.")
+    if rag_mode != NO_RAG and rag_augmenter is None:
+        raise ValueError(f"{rag_mode} requires a configured post-generation RAG augmenter.")
     safety_processor = processor or GenerationPostProcessor()
     records: List[Dict[str, Any]] = []
     total = len(instructions)
@@ -50,7 +57,7 @@ def build_prediction_records(
     post_processing_mode = "enabled" if enable_post_processing else "disabled"
     _print_progress(
         f"Starting test generation for {total} examples sequentially with "
-        f"model={model_name_or_path}; post-processing={post_processing_mode}.",
+        f"model={model_name_or_path}; rag={rag_mode}; post-processing={post_processing_mode}.",
         show_progress,
     )
     for index, (instruction, expected_answer) in enumerate(zip(instructions, answers)):
@@ -61,8 +68,20 @@ def build_prediction_records(
         if should_report:
             _print_progress(f"Generating prediction {completed}/{total}; source_index={source_id}.", show_progress)
         kg_context = item_metadata.get("kg_rag")
-        generation = generation_fn(instruction)
+        first_generation = generation_fn(instruction)
+        rag_augmentation = None
+        generation = first_generation
+        if rag_augmenter is not None:
+            augmentation = rag_augmenter.prepare_revision(instruction, first_generation)
+            rag_augmentation = asdict(augmentation)
+            generation = generation_fn(augmentation.revision_prompt)
         post_processing = None
+        if rag_augmentation is not None and rag_mode == KG_RAG:
+            kg_context = {
+                "incident": rag_augmentation["metadata"].get("incident", {}),
+                "nodes": rag_augmentation["retrieved_items"],
+                "edges": rag_augmentation["metadata"].get("edges", []),
+            }
         if enable_post_processing:
             post_processing = asdict(safety_processor.process(generation, kg_context=kg_context))
         records.append(
@@ -71,7 +90,10 @@ def build_prediction_records(
                 "model_name_or_path": model_name_or_path,
                 "instruction": instruction,
                 "expected_answer": expected_answer,
+                "draft_generation": first_generation if rag_augmentation is not None else None,
                 "generation": generation,
+                "rag_mode": rag_mode,
+                "rag_augmentation": rag_augmentation,
                 "kg_context": kg_context,
                 "post_processing_enabled": enable_post_processing,
                 "post_processing": post_processing,
@@ -137,6 +159,10 @@ def parse_args():
     parser.add_argument("--max-new-tokens", type=int, default=6000)
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--do-sample", action="store_true", default=False)
+    parser.add_argument("--rag-mode", choices=(NO_RAG, TEXT_RAG, KG_RAG), default=NO_RAG)
+    parser.add_argument("--text-rag-corpus", type=Path, help="Local JSON/JSONL/TXT corpus required by text_rag.")
+    parser.add_argument("--rag-top-k", type=_positive_int, default=3)
+    parser.add_argument("--rag-kg-depth", type=_positive_int, default=2)
     parser.add_argument("--progress-interval", type=_positive_int, default=1, help="Print progress every N test examples.")
     parser.add_argument("--no-progress", dest="show_progress", action="store_false", default=True)
     return parser.parse_args()
@@ -159,6 +185,16 @@ def main() -> None:
         allowed_cves=args.allowed_cve,
         require_context_cve_match=not args.allow_external_cves,
     )
+    rag_augmenter = None
+    if args.rag_mode == TEXT_RAG:
+        if not args.text_rag_corpus:
+            raise ValueError("--text-rag-corpus is required when --rag-mode text_rag.")
+        rag_augmenter = PostGenerationRAG(
+            TEXT_RAG,
+            text_retriever=TextRAGRetriever(load_text_corpus(args.text_rag_corpus), args.rag_top_k),
+        )
+    elif args.rag_mode == KG_RAG:
+        rag_augmenter = PostGenerationRAG(KG_RAG, kg_depth=args.rag_kg_depth)
     records = build_prediction_records(
         instructions,
         answers,
@@ -171,6 +207,8 @@ def main() -> None:
         processor=processor,
         show_progress=args.show_progress,
         progress_interval=args.progress_interval,
+        rag_mode=args.rag_mode,
+        rag_augmenter=rag_augmenter,
     )
     _print_progress(f"Saving {len(records)} predictions to {args.output}.", args.show_progress)
     save_prediction_records(args.output, records)

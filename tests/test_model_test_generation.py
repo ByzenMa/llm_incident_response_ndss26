@@ -1,5 +1,6 @@
 import json
 
+from generation_rag import TEXT_RAG, PostGenerationRAG, TextDocument, TextRAGRetriever
 from model_test_generation import build_prediction_records, parse_args, save_prediction_records
 
 
@@ -55,6 +56,7 @@ def test_cli_defaults_to_post_processing(monkeypatch):
     monkeypatch.setattr("sys.argv", ["model_test_generation.py", "--model-name-or-path", "model"])
     args = parse_args()
     assert args.enable_post_processing is True
+    assert args.rag_mode == "none"
 
     monkeypatch.setattr(
         "sys.argv", ["model_test_generation.py", "--model-name-or-path", "model", "--no-post-processing"]
@@ -117,3 +119,33 @@ def test_prediction_generation_calls_model_once_per_record():
 
     assert calls == ["p0", "p1", "p2", "p3", "p4"]
     assert [record["generation"] for record in records] == [f"result-p{index}" for index in range(5)]
+
+
+def test_post_generation_rag_generates_draft_then_revised_prediction():
+    calls = []
+
+    def generate(prompt):
+        calls.append(prompt)
+        return "draft response" if len(calls) == 1 else "revised grounded response"
+
+    augmenter = PostGenerationRAG(
+        TEXT_RAG,
+        text_retriever=TextRAGRetriever([TextDocument("ref", "Contain the affected host using log evidence.")]),
+    )
+    records = build_prediction_records(
+        ["Investigate host=web-01"],
+        ["Contain host=web-01"],
+        [],
+        generation_fn=generate,
+        model_name_or_path="test-model",
+        enable_post_processing=False,
+        show_progress=False,
+        rag_mode=TEXT_RAG,
+        rag_augmenter=augmenter,
+    )
+
+    assert len(calls) == 2
+    assert "draft response" in calls[1]
+    assert records[0]["draft_generation"] == "draft response"
+    assert records[0]["generation"] == "revised grounded response"
+    assert records[0]["rag_mode"] == TEXT_RAG
