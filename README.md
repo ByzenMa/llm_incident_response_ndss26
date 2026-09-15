@@ -503,6 +503,40 @@ using `reduction_from_text_to_kg` (positive means KG-RAG has the lower error
 rate). Record IDs and expected labels must match, and both input files must
 contain their post-processing reports.
 
+### No-verifier versus verifier ablation
+
+`verifier_ablation_comparison.py` runs a controlled verifier ablation over one
+saved prediction file. It does not regenerate text: both arms receive exactly
+the same `generation` values, which isolates verifier behavior from sampling,
+prompt, and model differences.
+
+- The **no-verifier arm** treats every generated action as released and reports
+  the incorrect commands, unsafe actions, and incomplete actions it would have
+  ignored.
+- The **verifier arm** applies `GenerationPostProcessor`, reports accepted and
+  blocked action counts, records incorrect commands and incomplete actions, and
+  measures how many unsafe actions were prevented or remained released.
+
+Generate raw predictions and run the ablation:
+
+```bash
+python model_test_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --test-data-file examples_16_june_kg_rag_test.json \
+  --no-post-processing \
+  --output raw_predictions.jsonl
+
+python verifier_ablation_comparison.py \
+  --input raw_predictions.jsonl \
+  --output verifier_ablation_report.json \
+  --verified-output predictions_with_verifier.jsonl
+```
+
+The optional verified output is a deep-copied JSONL file containing the newly
+recorded post-processing reports; the original raw prediction file is never
+modified. The report includes `generation_identity_preserved`, blocking rate,
+flagged issue counts, blocked record IDs, and unsafe-action release reduction.
+
 After training, the LoRA adapter, tokenizer, and `training_metadata.json` are saved locally by default in `fine_tuned_models/deepseek-r1-distill-qwen-14b-lora`. Set `--model-output-dir` to select another local destination:
 
 ```bash
