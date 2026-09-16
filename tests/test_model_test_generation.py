@@ -1,7 +1,14 @@
 import json
 
 from generation_rag import TEXT_RAG, PostGenerationRAG, TextDocument, TextRAGRetriever
-from model_test_generation import build_prediction_records, parse_args, save_prediction_records
+from model_test_generation import (
+    RECOVERY_ONLY_STRATEGY,
+    RISK_AWARE_STRATEGY,
+    build_prediction_records,
+    build_strategy_prompt,
+    parse_args,
+    save_prediction_records,
+)
 
 
 class _FakeProcessor:
@@ -57,6 +64,7 @@ def test_cli_defaults_to_post_processing(monkeypatch):
     args = parse_args()
     assert args.enable_post_processing is True
     assert args.rag_mode == "none"
+    assert args.response_strategy == "standard"
 
     monkeypatch.setattr(
         "sys.argv", ["model_test_generation.py", "--model-name-or-path", "model", "--no-post-processing"]
@@ -149,3 +157,26 @@ def test_post_generation_rag_generates_draft_then_revised_prediction():
     assert records[0]["draft_generation"] == "draft response"
     assert records[0]["generation"] == "revised grounded response"
     assert records[0]["rag_mode"] == TEXT_RAG
+
+
+def test_strategy_prompts_and_output_metadata_support_ablation():
+    recovery_prompt = build_strategy_prompt("Respond to incident", RECOVERY_ONLY_STRATEGY)
+    risk_prompt = build_strategy_prompt("Respond to incident", RISK_AWARE_STRATEGY)
+
+    assert "only recovery actions" in recovery_prompt
+    assert "least disruptive" in risk_prompt
+    assert "rollback plan" in risk_prompt
+
+    records = build_prediction_records(
+        ["Respond to incident"],
+        ["Expected answer"],
+        [],
+        generation_fn=lambda prompt: prompt,
+        model_name_or_path="test-model",
+        enable_post_processing=False,
+        show_progress=False,
+        response_strategy=RISK_AWARE_STRATEGY,
+    )
+
+    assert records[0]["response_strategy"] == RISK_AWARE_STRATEGY
+    assert records[0]["generation_prompt"] == risk_prompt

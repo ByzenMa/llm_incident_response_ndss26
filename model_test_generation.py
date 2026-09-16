@@ -14,6 +14,9 @@ from response_post_processor import GenerationPostProcessor
 
 
 DEFAULT_PREDICTIONS_FILE = Path("model_test_predictions.jsonl")
+STANDARD_STRATEGY = "standard"
+RECOVERY_ONLY_STRATEGY = "recovery_only"
+RISK_AWARE_STRATEGY = "risk_aware"
 
 
 def _positive_int(value: str) -> int:
@@ -28,6 +31,25 @@ def _print_progress(message: str, enabled: bool = True) -> None:
         print(f"[model_test_generation] {message}", flush=True)
 
 
+def build_strategy_prompt(instruction: str, strategy: str) -> str:
+    """Apply the response-policy prompt used by the strategy ablation."""
+    if strategy == STANDARD_STRATEGY:
+        return instruction
+    if strategy == RECOVERY_ONLY_STRATEGY:
+        guidance = (
+            "Recovery-only policy: propose only recovery actions that restore service or assets. "
+            "Do not propose investigation, monitoring, containment, eradication, or notification actions."
+        )
+    elif strategy == RISK_AWARE_STRATEGY:
+        guidance = (
+            "Risk-aware policy: select the least disruptive justified response action. Explicitly provide its target, "
+            "supporting evidence, precondition, operational risk, and rollback plan; avoid unsafe commands."
+        )
+    else:
+        raise ValueError(f"Unsupported response strategy: {strategy}.")
+    return f"{instruction.strip()}\n\n{guidance}"
+
+
 def build_prediction_records(
     instructions: Sequence[str],
     answers: Sequence[str],
@@ -40,6 +62,7 @@ def build_prediction_records(
     progress_interval: int = 1,
     rag_mode: str = NO_RAG,
     rag_augmenter: Optional[PostGenerationRAG] = None,
+    response_strategy: str = STANDARD_STRATEGY,
 ) -> List[Dict[str, Any]]:
     """Generate predictions and optionally apply the default safety gate."""
     if len(instructions) != len(answers):
@@ -50,6 +73,8 @@ def build_prediction_records(
         raise ValueError(f"Unsupported RAG mode: {rag_mode}.")
     if rag_mode != NO_RAG and rag_augmenter is None:
         raise ValueError(f"{rag_mode} requires a configured post-generation RAG augmenter.")
+    if response_strategy not in {STANDARD_STRATEGY, RECOVERY_ONLY_STRATEGY, RISK_AWARE_STRATEGY}:
+        raise ValueError(f"Unsupported response strategy: {response_strategy}.")
     safety_processor = processor or GenerationPostProcessor()
     records: List[Dict[str, Any]] = []
     total = len(instructions)
@@ -57,7 +82,8 @@ def build_prediction_records(
     post_processing_mode = "enabled" if enable_post_processing else "disabled"
     _print_progress(
         f"Starting test generation for {total} examples sequentially with "
-        f"model={model_name_or_path}; rag={rag_mode}; post-processing={post_processing_mode}.",
+        f"model={model_name_or_path}; strategy={response_strategy}; rag={rag_mode}; "
+        f"post-processing={post_processing_mode}.",
         show_progress,
     )
     for index, (instruction, expected_answer) in enumerate(zip(instructions, answers)):
@@ -68,11 +94,12 @@ def build_prediction_records(
         if should_report:
             _print_progress(f"Generating prediction {completed}/{total}; source_index={source_id}.", show_progress)
         kg_context = item_metadata.get("kg_rag")
-        first_generation = generation_fn(instruction)
+        generation_prompt = build_strategy_prompt(instruction, response_strategy)
+        first_generation = generation_fn(generation_prompt)
         rag_augmentation = None
         generation = first_generation
         if rag_augmenter is not None:
-            augmentation = rag_augmenter.prepare_revision(instruction, first_generation)
+            augmentation = rag_augmenter.prepare_revision(generation_prompt, first_generation)
             rag_augmentation = asdict(augmentation)
             generation = generation_fn(augmentation.revision_prompt)
         post_processing = None
@@ -89,6 +116,8 @@ def build_prediction_records(
                 "id": source_id,
                 "model_name_or_path": model_name_or_path,
                 "instruction": instruction,
+                "generation_prompt": generation_prompt,
+                "response_strategy": response_strategy,
                 "expected_answer": expected_answer,
                 "draft_generation": first_generation if rag_augmentation is not None else None,
                 "generation": generation,
@@ -160,6 +189,11 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--do-sample", action="store_true", default=False)
     parser.add_argument("--rag-mode", choices=(NO_RAG, TEXT_RAG, KG_RAG), default=NO_RAG)
+    parser.add_argument(
+        "--response-strategy",
+        choices=(STANDARD_STRATEGY, RECOVERY_ONLY_STRATEGY, RISK_AWARE_STRATEGY),
+        default=STANDARD_STRATEGY,
+    )
     parser.add_argument("--text-rag-corpus", type=Path, help="Local JSON/JSONL/TXT corpus required by text_rag.")
     parser.add_argument("--rag-top-k", type=_positive_int, default=3)
     parser.add_argument("--rag-kg-depth", type=_positive_int, default=2)
@@ -209,6 +243,7 @@ def main() -> None:
         progress_interval=args.progress_interval,
         rag_mode=args.rag_mode,
         rag_augmenter=rag_augmenter,
+        response_strategy=args.response_strategy,
     )
     _print_progress(f"Saving {len(records)} predictions to {args.output}.", args.show_progress)
     save_prediction_records(args.output, records)

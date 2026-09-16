@@ -537,6 +537,43 @@ recorded post-processing reports; the original raw prediction file is never
 modified. The report includes `generation_identity_preserved`, blocking rate,
 flagged issue counts, blocked record IDs, and unsafe-action release reduction.
 
+### Recovery-only versus risk-aware ablation
+
+`model_test_generation.py` also supports a response-policy ablation using the
+same model, held-out records, generation settings, RAG mode, and verifier. The
+`recovery_only` arm instructs the model to emit only service/asset recovery
+actions. The `risk_aware` arm asks for the least disruptive justified action
+and requires target, evidence, precondition, operational risk, and rollback
+guidance.
+
+```bash
+python model_test_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --test-data-file examples_16_june_kg_rag_test.json \
+  --response-strategy recovery_only \
+  --output recovery_only_predictions.jsonl
+
+python model_test_generation.py \
+  --model-name-or-path ./models/csle-kg-rag-lora \
+  --test-data-file examples_16_june_kg_rag_test.json \
+  --response-strategy risk_aware \
+  --output risk_aware_predictions.jsonl
+
+python recovery_risk_comparison.py \
+  --recovery-only-output recovery_only_predictions.jsonl \
+  --risk-aware-output risk_aware_predictions.jsonl \
+  --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
+  --output recovery_vs_risk_aware_report.json
+```
+
+The comparison requires matching record IDs and labels plus recorded verifier
+reports in both arms. It reports action/evidence/semantic score gaps; command,
+unsafe-action, and incomplete-action error-rate reductions; recovery-action
+rate; and target, evidence, precondition, risk, and rollback coverage. Positive
+`risk_aware_minus_recovery_only` values favor risk-aware quality, while positive
+`reduction_from_recovery_to_risk_aware` values indicate lower risk-aware error
+rates.
+
 After training, the LoRA adapter, tokenizer, and `training_metadata.json` are saved locally by default in `fine_tuned_models/deepseek-r1-distill-qwen-14b-lora`. Set `--model-output-dir` to select another local destination:
 
 ```bash
