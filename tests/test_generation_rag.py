@@ -1,6 +1,14 @@
 import json
 
-from generation_rag import KG_RAG, TEXT_RAG, PostGenerationRAG, TextDocument, TextRAGRetriever, load_text_corpus
+from generation_rag import (
+    KG_RAG,
+    TEXT_RAG,
+    PostGenerationRAG,
+    TextDocument,
+    TextRAGRetriever,
+    load_text_corpus,
+    save_rag_output,
+)
 
 
 def test_text_rag_retrieves_relevant_documents_and_builds_revision_prompt():
@@ -45,3 +53,20 @@ def test_load_text_corpus_supports_training_dataset_shape(tmp_path):
 
     assert [document.document_id for document in documents] == ["0", "1"]
     assert documents[0].text == "SSH alert\nContain SSH"
+
+
+def test_save_rag_output_persists_complete_result(tmp_path):
+    output = tmp_path / "rag" / "result.json"
+    augmentation = PostGenerationRAG(
+        TEXT_RAG,
+        text_retriever=TextRAGRetriever([TextDocument("reference-1", "Collect firewall evidence.")]),
+    ).prepare_revision("Investigate host=web-01", "Contain the host.")
+
+    save_rag_output(output, augmentation)
+
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert saved["mode"] == TEXT_RAG
+    assert saved["query"] == augmentation.query
+    assert saved["context_text"] == augmentation.context_text
+    assert saved["revision_prompt"] == augmentation.revision_prompt
+    assert saved["retrieved_items"][0]["document_id"] == "reference-1"

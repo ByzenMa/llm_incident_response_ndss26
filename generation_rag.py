@@ -22,6 +22,7 @@ from response_evaluation import lexical_semantic_similarity
 NO_RAG = "none"
 TEXT_RAG = "text_rag"
 KG_RAG = "kg_rag"
+DEFAULT_RAG_OUTPUT = Path("generation_rag_output.json")
 
 
 @dataclass
@@ -173,6 +174,15 @@ class PostGenerationRAG:
         return RAGAugmentation(self.mode, query, context_text, revision_prompt, items, metadata)
 
 
+def save_rag_output(path: Path, augmentation: RAGAugmentation) -> None:
+    """Persist the complete retrieval result and revision prompt as local JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(asdict(augmentation), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build text-RAG or KG-RAG context from a generated draft.")
     parser.add_argument("--mode", choices=(TEXT_RAG, KG_RAG), required=True)
@@ -181,6 +191,12 @@ def main() -> None:
     parser.add_argument("--text-corpus", type=Path)
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--kg-depth", type=int, default=2)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_RAG_OUTPUT,
+        help="Local JSON file for the generated RAG context and revision prompt.",
+    )
     args = parser.parse_args()
     retriever = None
     if args.mode == TEXT_RAG:
@@ -190,6 +206,7 @@ def main() -> None:
     augmentation = PostGenerationRAG(args.mode, retriever, args.kg_depth).prepare_revision(
         args.instruction, args.generation
     )
+    save_rag_output(args.output, augmentation)
     print(json.dumps(asdict(augmentation), indent=2, ensure_ascii=False))
 
 

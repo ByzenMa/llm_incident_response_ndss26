@@ -465,6 +465,28 @@ prompt, and calls the model a second time. The second answer is saved as
   security graph.
 - `--rag-mode none` preserves the single-pass behavior and is the default.
 
+The standalone RAG builder saves its complete result to local JSON. The output
+contains the retrieval query, context text, retrieved documents or KG nodes,
+metadata, and the revision prompt. `--output` defaults to
+`generation_rag_output.json`:
+
+```bash
+python generation_rag.py \
+  --mode text_rag \
+  --instruction 'Investigate SSH brute force on host=web-01' \
+  --generation 'Block the source address.' \
+  --text-corpus examples_16_june_original_train.json \
+  --top-k 3 \
+  --output text_rag_context.json
+
+python generation_rag.py \
+  --mode kg_rag \
+  --instruction 'Investigate CVE-2023-34362 on host=moveit-01' \
+  --generation 'Collect web logs and contain the host.' \
+  --kg-depth 2 \
+  --output kg_rag_context.json
+```
+
 Generate text-RAG and KG-RAG predictions for the same original held-out split:
 
 ```bash
