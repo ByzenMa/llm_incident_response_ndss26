@@ -487,6 +487,31 @@ python generation_rag.py \
   --output kg_rag_context.json
 ```
 
+For an existing model prediction JSON/JSONL file, use
+`batch_generation_rag.py` to build and save one RAG output per record. The
+original prediction file is read-only; each copied output record keeps all
+existing fields and adds `rag_mode` plus a complete `rag_output` object:
+
+```bash
+python batch_generation_rag.py \
+  --input model_test_predictions.jsonl \
+  --mode text_rag \
+  --text-corpus examples_16_june_original_train.json \
+  --top-k 3 \
+  --output model_test_predictions_text_rag.jsonl
+
+python batch_generation_rag.py \
+  --input model_test_predictions.jsonl \
+  --mode kg_rag \
+  --kg-depth 2 \
+  --output model_test_predictions_kg_rag.jsonl
+```
+
+By default the batch tool reads `instruction` and `generation`; use
+`--instruction-field` and `--generation-field` for another prediction schema.
+Progress is printed per record and can be controlled with
+`--progress-interval` or disabled with `--no-progress`.
+
 Generate text-RAG and KG-RAG predictions for the same original held-out split:
 
 ```bash
