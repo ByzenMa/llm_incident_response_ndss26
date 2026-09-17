@@ -155,6 +155,12 @@ class PostGenerationRAG:
             context_dict = asdict(context)
             context_text = context.prompt_context
             items = context_dict.get("nodes", [])
+            for item in items:
+                searchable_text = " ".join(
+                    str(item.get(field, "")) for field in ("id", "type", "name", "properties")
+                )
+                item["score"] = lexical_semantic_similarity(query, searchable_text)
+            items.sort(key=lambda item: (-item["score"], str(item.get("id", ""))))
             metadata = {
                 "kg_depth": self.kg_depth,
                 "incident": context_dict.get("incident", {}),

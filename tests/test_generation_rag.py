@@ -39,6 +39,10 @@ def test_kg_rag_builds_structured_context_from_draft():
     assert result.mode == KG_RAG
     assert result.metadata["incident"]["cves"] == ["CVE-2023-34362"]
     assert result.retrieved_items
+    assert all(isinstance(item["score"], float) for item in result.retrieved_items)
+    assert [item["score"] for item in result.retrieved_items] == sorted(
+        (item["score"] for item in result.retrieved_items), reverse=True
+    )
     assert "<kg_rag_context>" in result.revision_prompt
 
 

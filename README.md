@@ -541,16 +541,17 @@ report. Compare the paired outputs with:
 python rag_generation_comparison.py \
   --text-rag-output text_rag_predictions.jsonl \
   --kg-rag-output kg_rag_predictions.jsonl \
-  --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
+  --match-threshold 0.1 \
   --output text_vs_kg_rag_report.json
 ```
 
-The report compares action accuracy, evidence accuracy, and mean semantic
-similarity using `kg_rag_minus_text_rag` (positive favors KG-RAG). It also
-compares recorded incorrect-command, unsafe-action, and incomplete-action rates
-using `reduction_from_text_to_kg` (positive means KG-RAG has the lower error
-rate). Record IDs and expected labels must match, and both input files must
-contain their post-processing reports.
+The comparator reads `rag_output.retrieved_items[].score` from each paired
+record and reports cumulative top-1, top-2, and top-3 match rates and average
+scores. A score greater than `--match-threshold` is counted as a match. Missing
+top-k slots count as zero-score non-matches, so files returning fewer results do
+not receive an unfair advantage. Each rank reports KG-RAG-minus-text-RAG gaps
+and the winner by average score. Record IDs must match and both files must use
+the corresponding `rag_mode`.
 
 ### No-verifier versus verifier ablation
 
