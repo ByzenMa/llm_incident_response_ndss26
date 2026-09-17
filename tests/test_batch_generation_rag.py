@@ -83,6 +83,32 @@ def test_batch_rag_rejects_missing_required_fields():
         process_prediction_records([{"instruction": "prompt"}], augmenter, show_progress=False)
 
 
+def test_batch_rag_limit_processes_only_the_requested_prefix():
+    records = [
+        {"id": f"r{index}", "instruction": f"Inspect host-{index}", "generation": "Collect logs."}
+        for index in range(4)
+    ]
+    augmenter = PostGenerationRAG(
+        TEXT_RAG,
+        text_retriever=TextRAGRetriever([TextDocument("logs", "Collect host logs.")]),
+    )
+
+    output = process_prediction_records(records, augmenter, limit=2, show_progress=False)
+
+    assert [record["id"] for record in output] == ["r0", "r1"]
+    assert len(output) == 2
+
+
+def test_batch_rag_rejects_invalid_limit():
+    augmenter = PostGenerationRAG(
+        TEXT_RAG,
+        text_retriever=TextRAGRetriever([TextDocument("logs", "Collect host logs.")]),
+    )
+
+    with pytest.raises(ValueError, match="limit must be at least 1"):
+        process_prediction_records([], augmenter, limit=0, show_progress=False)
+
+
 def test_save_batch_rag_output_writes_jsonl(tmp_path):
     output = tmp_path / "rag" / "batch.jsonl"
     records = [{"id": "one", "rag_output": {"mode": TEXT_RAG}}]

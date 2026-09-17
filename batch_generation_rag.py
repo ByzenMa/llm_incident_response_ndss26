@@ -32,9 +32,13 @@ def process_prediction_records(
     generation_field: str = "generation",
     show_progress: bool = True,
     progress_interval: int = 1,
+    limit: int | None = None,
 ) -> List[Dict[str, Any]]:
-    """Add a complete RAG output to each copied prediction record."""
-    output_records = copy.deepcopy(list(records))
+    """Add a complete RAG output to copied records, optionally limiting the prefix."""
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be at least 1")
+    selected_records = records[:limit] if limit is not None else records
+    output_records = copy.deepcopy(list(selected_records))
     total = len(output_records)
     interval = max(1, progress_interval)
     _print_progress(
@@ -93,6 +97,11 @@ def main() -> None:
     parser.add_argument("--instruction-field", default="instruction")
     parser.add_argument("--generation-field", default="generation")
     parser.add_argument("--progress-interval", type=_positive_int, default=1)
+    parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        help="Only process and save the first N prediction records.",
+    )
     parser.add_argument("--no-progress", dest="show_progress", action="store_false", default=True)
     args = parser.parse_args()
 
@@ -110,6 +119,7 @@ def main() -> None:
         generation_field=args.generation_field,
         show_progress=args.show_progress,
         progress_interval=args.progress_interval,
+        limit=args.limit,
     )
     save_batch_rag_output(args.output, output_records)
     print(
@@ -119,6 +129,7 @@ def main() -> None:
                 "input": str(args.input),
                 "output": str(args.output),
                 "record_count": len(output_records),
+                "limit": args.limit,
             },
             indent=2,
             ensure_ascii=False,

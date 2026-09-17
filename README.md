@@ -498,6 +498,7 @@ python batch_generation_rag.py \
   --mode text_rag \
   --text-corpus examples_16_june_original_train.json \
   --top-k 3 \
+  --limit 100 \
   --output model_test_predictions_text_rag.jsonl
 
 python batch_generation_rag.py \
@@ -510,7 +511,8 @@ python batch_generation_rag.py \
 By default the batch tool reads `instruction` and `generation`; use
 `--instruction-field` and `--generation-field` for another prediction schema.
 Progress is printed per record and can be controlled with
-`--progress-interval` or disabled with `--no-progress`.
+`--progress-interval` or disabled with `--no-progress`. Use `--limit N` to
+process and save only the first N input records; omit it to process all records.
 
 Generate text-RAG and KG-RAG predictions for the same original held-out split:
 
