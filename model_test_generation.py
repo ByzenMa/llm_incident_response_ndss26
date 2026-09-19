@@ -228,7 +228,11 @@ def main() -> None:
             text_retriever=TextRAGRetriever(load_text_corpus(args.text_rag_corpus), args.rag_top_k),
         )
     elif args.rag_mode == KG_RAG:
-        rag_augmenter = PostGenerationRAG(KG_RAG, kg_depth=args.rag_kg_depth)
+        rag_augmenter = PostGenerationRAG(
+            KG_RAG,
+            kg_depth=args.rag_kg_depth,
+            kg_top_k=args.rag_top_k,
+        )
     records = build_prediction_records(
         instructions,
         answers,

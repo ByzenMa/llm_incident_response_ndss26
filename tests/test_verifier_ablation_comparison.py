@@ -1,7 +1,5 @@
 import json
 
-import pytest
-
 from verifier_ablation_comparison import VerifierAblationExperiment, save_records
 
 
@@ -56,8 +54,27 @@ def test_save_verified_records_writes_new_file(tmp_path):
     assert [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()] == records
 
 
-def test_ablation_rejects_already_verified_input():
-    with pytest.raises(ValueError, match="post-processing disabled"):
-        VerifierAblationExperiment().run(
-            [{"generation": "Inspect logs.", "post_processing_enabled": True}]
-        )
+def test_ablation_reprocesses_generation_when_input_already_has_verifier_output():
+    original_report = {"actions": [{"stale": True}], "blocked_actions": []}
+    records = [
+        {
+            "id": "already-verified",
+            "generation": {
+                "action_type": "eradication",
+                "target": "host=db-01",
+                "command": "rm -rf /",
+                "evidence": "ransomware log",
+            },
+            "post_processing_enabled": True,
+            "post_processing": original_report,
+        }
+    ]
+
+    report, verified = VerifierAblationExperiment().run(records)
+
+    assert report.generation_identity_preserved is True
+    assert report.no_verifier.released_action_count == 1
+    assert report.verifier.blocked_action_count == 1
+    assert verified[0]["generation"] == records[0]["generation"]
+    assert verified[0]["post_processing"] != original_report
+    assert records[0]["post_processing"] == original_report

@@ -76,8 +76,9 @@ class VerifierAblationExperiment:
     def run(
         self, records: Sequence[Dict[str, Any]]
     ) -> tuple[VerifierAblationReport, List[Dict[str, Any]]]:
-        if any(record.get("post_processing_enabled") is True for record in records):
-            raise ValueError("Verifier ablation input must contain raw generations with post-processing disabled.")
+        # Always derive both arms from the immutable original generation. Any
+        # previously recorded verifier state is deliberately ignored and is
+        # replaced only in the deep-copied verifier arm below.
         no_verifier_safety = self.safety_evaluator.evaluate(records)
         verified_records = copy.deepcopy(list(records))
         accepted_count = 0

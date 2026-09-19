@@ -135,14 +135,18 @@ class PostGenerationRAG:
         mode: str,
         text_retriever: Optional[TextRAGRetriever] = None,
         kg_depth: int = 2,
+        kg_top_k: int = 3,
     ) -> None:
         if mode not in {TEXT_RAG, KG_RAG}:
             raise ValueError(f"Post-generation RAG mode must be {TEXT_RAG!r} or {KG_RAG!r}.")
         if mode == TEXT_RAG and text_retriever is None:
             raise ValueError("text_rag mode requires a TextRAGRetriever.")
+        if kg_top_k < 1:
+            raise ValueError("kg_top_k must be at least 1.")
         self.mode = mode
         self.text_retriever = text_retriever
         self.kg_depth = kg_depth
+        self.kg_top_k = kg_top_k
 
     def prepare_revision(self, instruction: str, draft_generation: str) -> RAGAugmentation:
         query = f"{instruction}\n{draft_generation}".strip()
@@ -153,7 +157,7 @@ class PostGenerationRAG:
             incident = parse_logs([query], incident_id="post-generation-rag")
             context = SecurityKnowledgeGraph().retrieve_context(incident, depth=self.kg_depth)
             context_dict = asdict(context)
-            context_text = context.prompt_context
+            graph_context = context.prompt_context
             items = context_dict.get("nodes", [])
             for item in items:
                 searchable_text = " ".join(
@@ -161,10 +165,21 @@ class PostGenerationRAG:
                 )
                 item["score"] = lexical_semantic_similarity(query, searchable_text)
             items.sort(key=lambda item: (-item["score"], str(item.get("id", ""))))
+            items = items[: self.kg_top_k]
+            for rank, item in enumerate(items, start=1):
+                item["rank"] = rank
+            context_text = "\n\n".join(
+                f"[KG reference {item['rank']} score={item['score']:.4f}]\n"
+                f"type={item.get('type', 'unknown')} id={item.get('id', '')} "
+                f"name={item.get('name', '')} properties={item.get('properties', {})}"
+                for item in items
+            )
             metadata = {
                 "kg_depth": self.kg_depth,
+                "top_k": self.kg_top_k,
                 "incident": context_dict.get("incident", {}),
                 "edges": context_dict.get("edges", []),
+                "graph_context": graph_context,
             }
         revision_prompt = (
             f"{instruction.strip()}\n\n"
@@ -209,7 +224,12 @@ def main() -> None:
         if not args.text_corpus:
             parser.error("--text-corpus is required for text_rag mode.")
         retriever = TextRAGRetriever(load_text_corpus(args.text_corpus), top_k=args.top_k)
-    augmentation = PostGenerationRAG(args.mode, retriever, args.kg_depth).prepare_revision(
+    augmentation = PostGenerationRAG(
+        args.mode,
+        retriever,
+        args.kg_depth,
+        kg_top_k=args.top_k,
+    ).prepare_revision(
         args.instruction, args.generation
     )
     save_rag_output(args.output, augmentation)

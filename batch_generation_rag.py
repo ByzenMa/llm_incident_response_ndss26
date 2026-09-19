@@ -110,7 +110,12 @@ def main() -> None:
         if not args.text_corpus:
             parser.error("--text-corpus is required for text_rag mode.")
         text_retriever = TextRAGRetriever(load_text_corpus(args.text_corpus), top_k=args.top_k)
-    augmenter = PostGenerationRAG(args.mode, text_retriever=text_retriever, kg_depth=args.kg_depth)
+    augmenter = PostGenerationRAG(
+        args.mode,
+        text_retriever=text_retriever,
+        kg_depth=args.kg_depth,
+        kg_top_k=args.top_k,
+    )
     input_records = load_evaluation_records(args.input)
     output_records = process_prediction_records(
         input_records,

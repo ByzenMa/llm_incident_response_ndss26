@@ -39,11 +39,29 @@ def test_kg_rag_builds_structured_context_from_draft():
     assert result.mode == KG_RAG
     assert result.metadata["incident"]["cves"] == ["CVE-2023-34362"]
     assert result.retrieved_items
+    assert len(result.retrieved_items) <= 3
+    assert result.metadata["top_k"] == 3
+    assert [item["rank"] for item in result.retrieved_items] == list(
+        range(1, len(result.retrieved_items) + 1)
+    )
     assert all(isinstance(item["score"], float) for item in result.retrieved_items)
     assert [item["score"] for item in result.retrieved_items] == sorted(
         (item["score"] for item in result.retrieved_items), reverse=True
     )
     assert "<kg_rag_context>" in result.revision_prompt
+    assert "[KG reference 1 score=" in result.context_text
+
+
+def test_kg_rag_recall_respects_configurable_top_k():
+    result = PostGenerationRAG(KG_RAG, kg_depth=2, kg_top_k=2).prepare_revision(
+        "SSH brute force host=web-01",
+        "Investigate credential access and collect SSH logs.",
+    )
+
+    assert len(result.retrieved_items) == 2
+    assert result.metadata["top_k"] == 2
+    assert "[KG reference 2 score=" in result.context_text
+    assert "[KG reference 3 score=" not in result.context_text
 
 
 def test_load_text_corpus_supports_training_dataset_shape(tmp_path):

@@ -505,6 +505,7 @@ python batch_generation_rag.py \
   --input model_test_predictions.jsonl \
   --mode kg_rag \
   --kg-depth 2 \
+  --top-k 3 \
   --output model_test_predictions_kg_rag.jsonl
 ```
 
@@ -513,6 +514,10 @@ By default the batch tool reads `instruction` and `generation`; use
 Progress is printed per record and can be controlled with
 `--progress-interval` or disabled with `--no-progress`. Use `--limit N` to
 process and save only the first N input records; omit it to process all records.
+For KG-RAG, graph-neighborhood candidates are scored against the instruction
+and draft generation, sorted by score, and reduced to the final `--top-k`
+recall list (three items by default). The same scored `retrieved_items` shape is
+used by Text-RAG and KG-RAG so `rag_generation_comparison.py` can compare them.
 
 Generate text-RAG and KG-RAG predictions for the same original held-out split:
 
@@ -560,6 +565,11 @@ saved prediction file. It does not regenerate text: both arms receive exactly
 the same `generation` values, which isolates verifier behavior from sampling,
 prompt, and model differences.
 
+The input may already contain `post_processing_enabled: true` and a previous
+`post_processing` report. The experiment ignores that stored verifier state,
+uses the original `generation` for both arms, and writes a freshly computed
+report only into the copied verifier-arm records.
+
 - The **no-verifier arm** treats every generated action as released and reports
   the incorrect commands, unsafe actions, and incomplete actions it would have
   ignored.
@@ -567,7 +577,8 @@ prompt, and model differences.
   blocked action counts, records incorrect commands and incomplete actions, and
   measures how many unsafe actions were prevented or remained released.
 
-Generate raw predictions and run the ablation:
+Generate predictions and run the ablation (disabling post-processing during
+generation is optional):
 
 ```bash
 python model_test_generation.py \
