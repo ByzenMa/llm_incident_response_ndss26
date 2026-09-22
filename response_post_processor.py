@@ -67,6 +67,10 @@ _HIGH_RISK_PATTERNS = (
     (re.compile(r"\bkill\s+-9\s+1\b", re.IGNORECASE), "terminating init/system process"),
 )
 _DESTRUCTIVE_ACTION_TYPES = {"eradication", "recovery"}
+STANDARD_STRATEGY = "standard"
+RECOVERY_ONLY_STRATEGY = "recovery_only"
+RISK_AWARE_STRATEGY = "risk_aware"
+RESPONSE_STRATEGIES = {STANDARD_STRATEGY, RECOVERY_ONLY_STRATEGY, RISK_AWARE_STRATEGY}
 
 
 @dataclass
@@ -91,6 +95,7 @@ class PostProcessResult:
     blocked_actions: List[Dict[str, Any]]
     findings: List[Dict[str, Any]]
     summary: str
+    response_strategy: str = STANDARD_STRATEGY
 
 
 def _context_cves(kg_context: Optional[Dict[str, Any]]) -> Set[str]:
@@ -134,13 +139,24 @@ class GenerationPostProcessor:
         self.allowed_cves = {cve.upper() for cve in allowed_cves or []}
         self.require_context_cve_match = require_context_cve_match
 
-    def process(self, generation: Any, kg_context: Optional[Dict[str, Any]] = None) -> PostProcessResult:
+    def process(
+        self,
+        generation: Any,
+        kg_context: Optional[Dict[str, Any]] = None,
+        response_strategy: str = STANDARD_STRATEGY,
+    ) -> PostProcessResult:
+        if response_strategy not in RESPONSE_STRATEGIES:
+            raise ValueError(f"Unsupported response strategy: {response_strategy}.")
         parsed_actions = self.parse_actions(generation)
         accepted: List[PostProcessedAction] = []
         blocked: List[PostProcessedAction] = []
         all_findings: List[ValidationFinding] = []
         for action in parsed_actions:
-            findings = self.validate_action(action, kg_context=kg_context)
+            findings = self.validate_action(
+                action,
+                kg_context=kg_context,
+                response_strategy=response_strategy,
+            )
             all_findings.extend(findings)
             action_blocked = any(f.severity == "error" for f in findings)
             wrapped = PostProcessedAction(
@@ -159,6 +175,7 @@ class GenerationPostProcessor:
             blocked_actions=[asdict(item) for item in blocked],
             findings=[asdict(finding) for finding in all_findings],
             summary=self._summarize(result_ok, len(parsed_actions), len(blocked), all_findings),
+            response_strategy=response_strategy,
         )
 
     def parse_actions(self, generation: Any) -> List[ParsedAction]:
@@ -180,14 +197,53 @@ class GenerationPostProcessor:
                 items = [generation]
         return self.parser.parse_many(items)
 
-    def validate_action(self, action: ParsedAction, kg_context: Optional[Dict[str, Any]] = None) -> List[ValidationFinding]:
+    def validate_action(
+        self,
+        action: ParsedAction,
+        kg_context: Optional[Dict[str, Any]] = None,
+        response_strategy: str = STANDARD_STRATEGY,
+    ) -> List[ValidationFinding]:
         text = "\n".join([action.source_action, action.source_explanation, " ".join(action.command)])
         findings: List[ValidationFinding] = []
         findings.extend(self._validate_cves(text, kg_context))
         findings.extend(self._validate_commands(action.command))
         findings.extend(self._validate_policy(action))
         findings.extend(self._validate_completeness(action))
+        findings.extend(self._validate_response_strategy(action, response_strategy))
         findings.extend(self._validate_attack_path(text, kg_context))
+        return findings
+
+    def _validate_response_strategy(
+        self, action: ParsedAction, response_strategy: str
+    ) -> List[ValidationFinding]:
+        """Apply experiment policy after generation without changing the prompt."""
+        if response_strategy == STANDARD_STRATEGY:
+            return []
+        if response_strategy == RECOVERY_ONLY_STRATEGY:
+            if action.action_type != "recovery":
+                return [
+                    ValidationFinding(
+                        "response_strategy",
+                        "error",
+                        "Recovery-only post-processing permits only recovery actions.",
+                        action.action_type,
+                    )
+                ]
+            return []
+        findings: List[ValidationFinding] = []
+        for field_name, value in (
+            ("precondition", action.precondition),
+            ("risk", action.risk),
+            ("rollback", action.rollback),
+        ):
+            if not value:
+                findings.append(
+                    ValidationFinding(
+                        "action_completeness",
+                        "warning",
+                        f"Risk-aware post-processing requires an explicit {field_name}.",
+                    )
+                )
         return findings
 
     def _validate_cves(self, text: str, kg_context: Optional[Dict[str, Any]]) -> List[ValidationFinding]:

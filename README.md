@@ -600,35 +600,31 @@ flagged issue counts, blocked record IDs, and unsafe-action release reduction.
 
 ### Recovery-only versus risk-aware ablation
 
-`model_test_generation.py` also supports a response-policy ablation using the
-same model, held-out records, generation settings, RAG mode, and verifier. The
-`recovery_only` arm instructs the model to emit only service/asset recovery
-actions. The `risk_aware` arm asks for the least disruptive justified action
-and requires target, evidence, precondition, operational risk, and rollback
-guidance.
+This ablation does **not** inject recovery or risk guidance into the model
+prompt and does not require rerunning model inference. Point
+`recovery_risk_postprocess_experiment.py` at an existing model output file; it
+deep-copies every saved `generation` into two
+post-processing arms. The `recovery_only` arm blocks non-recovery actions. The
+`risk_aware` arm applies the normal safety gate and records missing target,
+evidence, precondition, operational-risk, and rollback information. This keeps
+model output identical and isolates the effect of the two post-processing
+policies.
 
 ```bash
-python model_test_generation.py \
-  --model-name-or-path ./models/csle-kg-rag-lora \
-  --test-data-file examples_16_june_kg_rag_test.json \
-  --response-strategy recovery_only \
-  --output recovery_only_predictions.jsonl
-
-python model_test_generation.py \
-  --model-name-or-path ./models/csle-kg-rag-lora \
-  --test-data-file examples_16_june_kg_rag_test.json \
-  --response-strategy risk_aware \
-  --output risk_aware_predictions.jsonl
-
-python recovery_risk_comparison.py \
+python recovery_risk_postprocess_experiment.py \
+  --input existing_model_predictions.jsonl \
+  --mode both \
   --recovery-only-output recovery_only_predictions.jsonl \
   --risk-aware-output risk_aware_predictions.jsonl \
-  --semantic-model sentence-transformers/all-MiniLM-L6-v2 \
-  --output recovery_vs_risk_aware_report.json
+  --comparison-output recovery_vs_risk_aware_report.json
 ```
 
-The comparison requires matching record IDs and labels plus recorded verifier
-reports in both arms. It reports action/evidence/semantic score gaps; command,
+Use `--mode recovery_only` or `--mode risk_aware` to generate only one
+post-processing file. The default `both` mode writes both arms and their
+comparison report in one command. The output summary explicitly records
+`model_generation_run: false`. The lower-level comparator can also consume existing paired files with
+`--recovery-only-output` and `--risk-aware-output`. It reports
+action/evidence/semantic score gaps; command,
 unsafe-action, and incomplete-action error-rate reductions; recovery-action
 rate; and target, evidence, precondition, risk, and rollback coverage. Positive
 `risk_aware_minus_recovery_only` values favor risk-aware quality, while positive

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
-from model_test_generation import RECOVERY_ONLY_STRATEGY, RISK_AWARE_STRATEGY
 from response_evaluation import (
     LabelSimilarityEvaluator,
     ResponseEvaluator,
@@ -18,6 +18,11 @@ from response_evaluation import (
     load_evaluation_records,
 )
 from response_model_comparison import validate_paired_records
+from response_post_processor import (
+    RECOVERY_ONLY_STRATEGY,
+    RISK_AWARE_STRATEGY,
+    GenerationPostProcessor,
+)
 
 
 @dataclass
@@ -107,6 +112,52 @@ def _error_gap(recovery: float, risk_aware: float) -> ErrorRateGap:
     return ErrorRateGap(recovery, risk_aware, recovery - risk_aware)
 
 
+def build_post_processed_strategy_arms(
+    records: Sequence[Dict[str, Any]],
+    processor: Optional[GenerationPostProcessor] = None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Build both policy arms from the same saved generations."""
+    safety_processor = processor or GenerationPostProcessor()
+    return (
+        build_post_processed_strategy_arm(records, RECOVERY_ONLY_STRATEGY, safety_processor),
+        build_post_processed_strategy_arm(records, RISK_AWARE_STRATEGY, safety_processor),
+    )
+
+
+def build_post_processed_strategy_arm(
+    records: Sequence[Dict[str, Any]],
+    strategy: str,
+    processor: Optional[GenerationPostProcessor] = None,
+) -> List[Dict[str, Any]]:
+    """Apply one post-processing policy to copied saved generations."""
+    if strategy not in {RECOVERY_ONLY_STRATEGY, RISK_AWARE_STRATEGY}:
+        raise ValueError(f"Unsupported experiment strategy: {strategy}.")
+    safety_processor = processor or GenerationPostProcessor()
+    arm = copy.deepcopy(list(records))
+    for index, record in enumerate(arm):
+        if record.get("generation") is None:
+            raise ValueError(f"Record {index} does not contain generation.")
+        kg_context = record.get("kg_context", record.get("security_context"))
+        record["response_strategy"] = strategy
+        record["post_processing_enabled"] = True
+        record["post_processing"] = asdict(
+            safety_processor.process(
+                record["generation"],
+                kg_context=kg_context,
+                response_strategy=strategy,
+            )
+        )
+    return arm
+
+
+def save_strategy_records(path: Path, records: Sequence[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+
 class RecoveryRiskComparator:
     def __init__(
         self,
@@ -142,24 +193,37 @@ class RecoveryRiskComparator:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare recovery-only and risk-aware prediction outputs.")
-    parser.add_argument("--recovery-only-output", type=Path, required=True)
-    parser.add_argument("--risk-aware-output", type=Path, required=True)
+    parser.add_argument("--input", type=Path, help="One prediction file used to build both post-processing arms.")
+    parser.add_argument("--recovery-only-output", type=Path)
+    parser.add_argument("--risk-aware-output", type=Path)
+    parser.add_argument("--save-recovery-arm", type=Path)
+    parser.add_argument("--save-risk-aware-arm", type=Path)
     parser.add_argument("--semantic-model")
     parser.add_argument("--progress-interval", type=int, default=1)
     parser.add_argument("--no-progress", dest="show_progress", action="store_false", default=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     scorer = SentenceTransformerSimilarity(args.semantic_model) if args.semantic_model else None
+    if args.input:
+        recovery_records, risk_records = build_post_processed_strategy_arms(
+            load_evaluation_records(args.input)
+        )
+        if args.save_recovery_arm:
+            save_strategy_records(args.save_recovery_arm, recovery_records)
+        if args.save_risk_aware_arm:
+            save_strategy_records(args.save_risk_aware_arm, risk_records)
+    elif args.recovery_only_output and args.risk_aware_output:
+        recovery_records = load_evaluation_records(args.recovery_only_output)
+        risk_records = load_evaluation_records(args.risk_aware_output)
+    else:
+        parser.error("Provide --input, or both --recovery-only-output and --risk-aware-output.")
     report = RecoveryRiskComparator(
         similarity_evaluator=LabelSimilarityEvaluator(
             semantic_scorer=scorer,
             show_progress=args.show_progress,
             progress_interval=args.progress_interval,
         )
-    ).compare(
-        load_evaluation_records(args.recovery_only_output),
-        load_evaluation_records(args.risk_aware_output),
-    )
+    ).compare(recovery_records, risk_records)
     report_json = json.dumps(asdict(report), indent=2, ensure_ascii=False)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(report_json + "\n", encoding="utf-8")

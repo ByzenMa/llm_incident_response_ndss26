@@ -2,7 +2,7 @@ from dataclasses import asdict
 
 from incident_log_parser import parse_logs
 from kg_rag import SecurityKnowledgeGraph
-from response_post_processor import GenerationPostProcessor
+from response_post_processor import GenerationPostProcessor, RECOVERY_ONLY_STRATEGY, RISK_AWARE_STRATEGY
 
 
 def _context_for_log(log):
@@ -56,3 +56,39 @@ def test_post_processor_records_incomplete_actions():
     completeness = [finding for finding in result.findings if finding["category"] == "action_completeness"]
     assert any("target" in finding["message"] for finding in completeness)
     assert any("evidence" in finding["message"] for finding in completeness)
+
+
+def test_recovery_only_strategy_is_enforced_after_generation():
+    generation = {
+        "action_type": "investigation",
+        "target": "host=web-01",
+        "evidence": "alert",
+    }
+
+    result = GenerationPostProcessor().process(
+        generation,
+        response_strategy=RECOVERY_ONLY_STRATEGY,
+    )
+
+    assert result.response_strategy == RECOVERY_ONLY_STRATEGY
+    assert result.accepted is False
+    assert result.blocked_actions[0]["findings"][-1]["category"] == "response_strategy"
+
+
+def test_risk_aware_strategy_records_missing_safety_fields_after_generation():
+    generation = {
+        "action_type": "containment",
+        "target": "host=web-01",
+        "evidence": "alert",
+    }
+
+    result = GenerationPostProcessor().process(
+        generation,
+        response_strategy=RISK_AWARE_STRATEGY,
+    )
+
+    messages = [finding["message"] for finding in result.findings]
+    assert result.response_strategy == RISK_AWARE_STRATEGY
+    assert any("precondition" in message for message in messages)
+    assert any("risk" in message for message in messages)
+    assert any("rollback" in message for message in messages)

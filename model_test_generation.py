@@ -10,15 +10,15 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from enriched_training_dataset import DEFAULT_KG_RAG_TEST_FILE, load_examples_from_local_json
 from generation_rag import KG_RAG, NO_RAG, TEXT_RAG, PostGenerationRAG, TextRAGRetriever, load_text_corpus
-from response_post_processor import GenerationPostProcessor
+from response_post_processor import (
+    RECOVERY_ONLY_STRATEGY,
+    RISK_AWARE_STRATEGY,
+    STANDARD_STRATEGY,
+    GenerationPostProcessor,
+)
 
 
 DEFAULT_PREDICTIONS_FILE = Path("model_test_predictions.jsonl")
-STANDARD_STRATEGY = "standard"
-RECOVERY_ONLY_STRATEGY = "recovery_only"
-RISK_AWARE_STRATEGY = "risk_aware"
-
-
 def _positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
@@ -32,22 +32,10 @@ def _print_progress(message: str, enabled: bool = True) -> None:
 
 
 def build_strategy_prompt(instruction: str, strategy: str) -> str:
-    """Apply the response-policy prompt used by the strategy ablation."""
-    if strategy == STANDARD_STRATEGY:
-        return instruction
-    if strategy == RECOVERY_ONLY_STRATEGY:
-        guidance = (
-            "Recovery-only policy: propose only recovery actions that restore service or assets. "
-            "Do not propose investigation, monitoring, containment, eradication, or notification actions."
-        )
-    elif strategy == RISK_AWARE_STRATEGY:
-        guidance = (
-            "Risk-aware policy: select the least disruptive justified response action. Explicitly provide its target, "
-            "supporting evidence, precondition, operational risk, and rollback plan; avoid unsafe commands."
-        )
-    else:
+    """Validate strategy selection while keeping the model prompt unchanged."""
+    if strategy not in {STANDARD_STRATEGY, RECOVERY_ONLY_STRATEGY, RISK_AWARE_STRATEGY}:
         raise ValueError(f"Unsupported response strategy: {strategy}.")
-    return f"{instruction.strip()}\n\n{guidance}"
+    return instruction
 
 
 def build_prediction_records(
@@ -110,7 +98,13 @@ def build_prediction_records(
                 "edges": rag_augmentation["metadata"].get("edges", []),
             }
         if enable_post_processing:
-            post_processing = asdict(safety_processor.process(generation, kg_context=kg_context))
+            post_processing = asdict(
+                safety_processor.process(
+                    generation,
+                    kg_context=kg_context,
+                    response_strategy=response_strategy,
+                )
+            )
         records.append(
             {
                 "id": source_id,
